@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     )
 
     # Application
-    app_name: str = "Atlas AI"
+    app_name: str = "UrsBiz"
     app_env: str = "development"
     app_debug: bool = True
     app_version: str = "1.0.0"

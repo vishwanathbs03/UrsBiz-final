@@ -322,9 +322,6 @@ def _replace_collection(
     new items in a single transaction. Returns the freshly-loaded
     collection."""
     collection = getattr(business, business_attr)
-    # Mutate the live collection; SQLAlchemy will issue DELETEs for
-    # orphans and INSERTs for new rows. The relationship is configured
-    # with cascade="all, delete-orphan" so this is safe.
     collection.clear()
     db.flush()
 
@@ -334,7 +331,7 @@ def _replace_collection(
         db.add(obj)
     db.flush()
 
-    # Re-read so the caller gets ORM objects with ids + timestamps.
+    # Safely refresh collection attributes without breaking back-populations
     db.refresh(business, [business_attr])
     return list(getattr(business, business_attr))
 

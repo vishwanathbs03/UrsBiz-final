@@ -35,9 +35,9 @@ Built with **FastAPI (Python 3.12)** + **Next.js 15 (TypeScript)** + **PostgreSQ
 ## Quick Start (Development)
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/your-org/UrsAi.git
-cd UrsAi
+# Clone the repository
+git clone https://github.com/your-org/ursbiz.git
+cd ursbiz
 
 # 2. Setup backend
 cd backend
@@ -164,7 +164,7 @@ npm run dev
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `APP_NAME` | `Atlas AI` | Application display name |
+| `APP_NAME` | `UrsBiz` | Application display name |
 | `APP_ENV` | `development` | `development` or `production` |
 | `APP_HOST` | `0.0.0.0` | Bind address |
 | `APP_PORT` | `8000` | Bind port (run on 8001 to match frontend proxy) |
@@ -312,7 +312,7 @@ Backend default in `.env.example` is port 8000, but the frontend proxy and `.env
 ## Project Structure
 
 ```
-UrsAi/
+ursbiz/
 ├── backend/
 │   ├── app/
 │   │   ├── api/v1/endpoints/   # FastAPI route handlers

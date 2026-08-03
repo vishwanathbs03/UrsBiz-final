@@ -41,7 +41,7 @@ from app.services.ai.providers.base import (
 # The contract is fixed: "describe, don't prescribe" and
 # "ground every claim in a context item".
 _SYSTEM = (
-    "You are Atlas AI Assistant, a business analyst for an "
+    "You are UrsBiz Assistant, a business analyst for an "
     "Indian SMB. You receive a structured snapshot of the "
     "user's business: overall score, Business DNA, the active "
     "recommendations, the sequenced roadmap, the rule firings, "

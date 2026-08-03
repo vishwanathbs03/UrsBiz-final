@@ -75,22 +75,69 @@ export async function apiRequest<T = unknown>(
     });
   }
 
-  const response = await fetch(url, {
-    ...rest,
-    // The backend issues the JWT as an HTTP-only cookie. Browsers
-    // refuse to attach it on cross-origin requests unless the
-    // request opts in via `credentials: "include"`. Without this,
-    // POST /business, GET /auth/me and every other protected
-    // endpoint return 401 after login even though the cookie is
-    // present in the browser jar.
-    credentials: rest.credentials ?? "include",
-    headers: {
-      Accept: "application/json",
-      ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
-      ...headers,
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  // Network-level timeout (8s). Some long-running endpoints (analysis
+  // recompute, decision-engine synthesis) can take 5-10s; 8s is the
+  // budget we want to surface to the user. The auth service uses a
+  // tighter 5s budget — for the business profile write we can be a
+  // little more generous because it's a heavier payload.
+  const timeoutMs = 8000;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  // If the caller passed their own signal, link it through.
+  if (rest.signal) {
+    const userSignal = rest.signal as AbortSignal;
+    if (userSignal.aborted) {
+      ctrl.abort(userSignal.reason);
+    } else {
+      userSignal.addEventListener(
+        "abort",
+        () => ctrl.abort(userSignal.reason),
+        { once: true },
+      );
+    }
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...rest,
+      signal: ctrl.signal,
+      // The backend issues the JWT as an HTTP-only cookie. Browsers
+      // refuse to attach it on cross-origin requests unless the
+      // request opts in via `credentials: "include"`. Without this,
+      // POST /business, GET /auth/me and every other protected
+      // endpoint return 401 after login even though the cookie is
+      // present in the browser jar.
+      credentials: rest.credentials ?? "include",
+      headers: {
+        Accept: "application/json",
+        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+        ...headers,
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (cause) {
+    clearTimeout(timer);
+    // Network failure (DNS, refused, IPv6 unreachable, etc.).
+    // Convert the raw TypeError into an ApiError so callers can
+    // recognise the failure mode uniformly instead of guessing on
+    // `err instanceof TypeError`.
+    if (cause instanceof Error && cause.name === "AbortError") {
+      throw new ApiError(
+        "Request timed out. Please check your connection and try again.",
+        0,
+        { detail: "Network error: request timed out", type: "AbortError" },
+      );
+    }
+    const message = cause instanceof Error ? cause.message : "Network error";
+    throw new ApiError(
+      `Could not reach the server. ${message}. ` +
+        "If the backend is running on a different host or port, set NEXT_PUBLIC_API_URL.",
+      0,
+      { detail: "Network error", type: "NetworkError", cause: message },
+    );
+  }
+  clearTimeout(timer);
 
   const parsed = await parseBody(response);
 

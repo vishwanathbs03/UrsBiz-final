@@ -236,10 +236,27 @@ function buildReportHtml(args: {
   ${sections.join("\n")}
 
   <footer class="footer">
-    Data is sourced live from the analytical engines (Digital Twin,
-    Roadmap, Recommendations, Scores, DNA, Rules, Decision,
-    Intelligence). No derivations are performed on top of the
-    upstream payloads in this PDF.
+    <p>
+      Data is sourced live from the analytical engines (Digital Twin,
+      Roadmap, Recommendations, Scores, DNA, Rules, Decision,
+      Intelligence). No derivations are performed on top of the
+      upstream payloads in this PDF.
+    </p>
+    <p class="limits">
+      Limitations: business benchmarks are <strong>internal
+      illustrative baselines</strong>, not external industry averages;
+      scheme matching is informational and does not constitute
+      eligibility or approval; revenue / growth projections shown
+      elsewhere are scenario estimates, not forecasts; industry /
+      competitor comparisons are not included in this report.
+    </p>
+    <p class="limits">
+      Methodology: each section is generated from the same payload
+      the dashboard reads. Where the dashboard shows an empty state,
+      the same value is omitted here. Numbers you see in this PDF
+      match the values you saw on screen at the time it was
+      generated.
+    </p>
   </footer>
 </body>
 </html>`;
@@ -521,7 +538,7 @@ function formatTimestamp(iso: string): string {
 }
 
 function buildFilename(businessName: string | null): string {
-  const slug = (businessName ?? "atlas")
+  const slug = (businessName ?? "ursbiz")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
