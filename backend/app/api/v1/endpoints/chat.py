@@ -62,6 +62,7 @@ from app.schemas.chat import (
     ChatDeleteResponse,
     ChatMessageAppendResponse,
     ChatMessageCreateRequest,
+    ChatProviderStatusResponse,
     ChatSessionCreateRequest,
     ChatSessionDetail,
     ChatSessionListResponse,
@@ -159,6 +160,53 @@ def _service(db: Annotated[Session, Depends(get_db)]) -> ConversationService:
         ChatSessionRepository(db),
         assistant_service=assistant_service,
         knowledge_retriever=knowledge_retriever,
+    )
+
+
+def _provider_status_service(
+    db: Annotated[Session, Depends(get_db)],
+) -> AssistantProviderService:
+    """Build the bare AssistantProviderService for the status endpoint.
+
+    The status endpoint only needs the factory + context builder
+    wiring (it never calls ``generate``), so we keep it on a
+    lighter dependency path. ``AssistantContextBuilder`` is
+    constructed against a dummy owner — the status probe does
+    not read any business data.
+    """
+    repo = BusinessRepository(db)
+    decision_svc = AIDecisionService(repo)
+
+    def twin_provider(owner_id: int):
+        return TwinService(repo).compute(owner_id)
+
+    def recommendations_provider(owner_id: int):
+        return RecommendationService(repo).compute(owner_id)
+
+    def roadmap_provider(owner_id: int):
+        return RoadmapService(repo).compute(owner_id)
+
+    def rules_provider(owner_id: int):
+        return RuleEngineService(repo).compute(owner_id)
+
+    def insights_provider(owner_id: int):
+        try:
+            return decision_svc.compute(owner_id)
+        except BusinessNotFound:
+            return {"generated_at": None, "decision": {"insights": []}}
+
+    context_builder = AssistantContextBuilder(
+        twin_provider=twin_provider,
+        recommendations_provider=recommendations_provider,
+        roadmap_provider=roadmap_provider,
+        rules_provider=rules_provider,
+        insights_provider=insights_provider,
+    )
+    settings = get_settings()
+    factory = ProviderFactory(settings)
+    return AssistantProviderService(
+        context_builder=context_builder,
+        provider_factory=factory,
     )
 
 
@@ -263,6 +311,7 @@ def append_message(
             owner_id=current_user.id,
             session_id=session_id,
             content=payload.content,
+            mode=payload.mode,
         )
     except ChatSessionNotFound as exc:
         raise HTTPException(
@@ -279,3 +328,25 @@ def append_message(
         "assistant_message": result.assistant_message,
         "session": result.session,
     })
+
+
+@router.get(
+    "/provider-status",
+    response_model=ChatProviderStatusResponse,
+    summary="Return the active AI provider's reachability + mode list.",
+)
+def provider_status(
+    current_user: Annotated[User, Depends(get_current_user)],
+    assistant_service: Annotated[
+        AssistantProviderService, Depends(_provider_status_service)
+    ],
+) -> ChatProviderStatusResponse:
+    """Surface provider name, model, and availability for the chat header.
+
+    H7.8C — the response never includes the API key, the
+    Authorization header, or the upstream base URL. The frontend
+    uses the data to render the "Ollama connected" / "Provider
+    unavailable" dot + the mode toggle.
+    """
+    status_payload = assistant_service.provider_status()
+    return ChatProviderStatusResponse.model_validate(status_payload)

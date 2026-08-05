@@ -108,6 +108,130 @@ export interface ChatMessage {
   kind?: QueryKind;
   /** Sprint H4 — McKinsey-grade structured payload. */
   consultant?: ConsultantResponse;
+  /**
+   * H7.8A P2 — per-message fallback flag.
+   *
+   * For the client-side deterministic consultant the answer is
+   * always rule-engine derived (no LLM), so the UI MUST render
+   * "Calculated by UrsBiz rule engine". For backend chat
+   * sessions (ChatMessageOut), the flag is supplied by the
+   * server and the same rule applies.
+   *
+   * Default: `true` for the client deterministic consultant
+   * because every response it produces is rule-engine derived.
+   */
+  fallback_used?: boolean;
+  /**
+   * H7.8C — per-message GenerationMeta envelope from the
+   * backend. Provides the trust label source-of-truth:
+   * provider, model, mode, fallback_reason, evidence_count,
+   * schema_validated, grounding_validated, latency, etc.
+   *
+   * Absent for messages created by the client-side
+   * deterministic consultant (no server round-trip).
+   */
+  generation?: ChatGenerationMeta;
+}
+
+/**
+ * H7.8C — wire mirror of the backend's
+ * ``ChatGenerationMeta`` schema. Three-state badge logic
+ * (grounded-generative / open-generative / fallback) is
+ * derived from this struct, never from text heuristics.
+ */
+export interface ChatGenerationMeta {
+  provider: string;
+  model: string;
+  mode: "grounded" | "open";
+  fallback_used: boolean;
+  fallback_reason?:
+    | "provider_unavailable"
+    | "timeout"
+    | "rate_limited"
+    | "provider_error"
+    | "http_4xx"
+    | "http_5xx"
+    | "malformed_response"
+    | "empty_response"
+    | "schema_invalid"
+    | "grounding_invalid"
+    | "not_configured"
+    | "open_mode_provider_failure"
+    | null;
+  generation_method: "generative" | "deterministic";
+  schema_validated: boolean;
+  grounding_validated: boolean;
+  server_grounding_score: number;
+  evidence_count: number;
+  confidence: number | null;
+  assumptions: string[];
+  limitations: string[];
+  evidence_references: string[];
+  generated_at: string;
+  prompt_truncated: boolean;
+  provider_latency_ms: number | null;
+  grounded_payload?: ChatGroundedResponse | null;
+}
+
+export interface ChatGroundedEvidenceReference {
+  id: string;
+  kind: string;
+  label: string;
+}
+
+export interface ChatGroundedFinding {
+  title: string;
+  detail: string;
+  evidence_refs: string[];
+}
+
+export interface ChatGroundedRecommendation {
+  recommendation_id: string;
+  title: string;
+  rationale: string;
+  evidence_refs: string[];
+}
+
+export interface ChatGroundedPlanItem {
+  week: number;
+  task: string;
+  recommendation_ref: string | null;
+  evidence_refs: string[];
+}
+
+export interface ChatGroundedSchemeMatch {
+  scheme_ref: string;
+  match_explanation: string;
+  evidence_refs: string[];
+}
+
+export interface ChatGroundedResponse {
+  executive_summary: string;
+  key_findings: ChatGroundedFinding[];
+  recommendations: ChatGroundedRecommendation[];
+  thirty_day_plan: ChatGroundedPlanItem[];
+  scheme_matches: ChatGroundedSchemeMatch[];
+  assumptions: string[];
+  limitations: string[];
+  confidence: number;
+  evidence_references: ChatGroundedEvidenceReference[];
+  server_grounding_score: number;
+}
+
+/**
+ * H7.8C — provider status response from
+ * ``GET /api/v1/chat/provider-status``. Used by
+ * AssistantHeader to render the green/red dot indicator.
+ */
+export interface ChatProviderStatus {
+  configured_provider: string;
+  runtime_provider: string;
+  model: string;
+  available: boolean;
+  schema_required: boolean;
+  fallback_active: boolean;
+  modes: Array<"grounded" | "open">;
+  default_mode: "grounded" | "open";
 }
 
 export interface Conversation {

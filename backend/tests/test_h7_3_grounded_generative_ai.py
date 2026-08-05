@@ -257,9 +257,13 @@ def test_flagship_2_top_actions_lists_sorted_recommendations() -> None:
     cloud_idx = body.index("rec_digital_adoption")
     shop_idx = body.index("rec_market_expansion")
     assert cloud_idx < shop_idx, "recommendations must be sorted by (priority, score_gain)"
-    # The user prompt must be the final paragraph.
+    # H7.8C — the user prompt is wrapped in an untrusted-question
+    # delimiter so prompt-injection attempts cannot bleed into the
+    # system contract. The literal text must still be present.
+    assert "=== UNTRUSTED USER QUESTION ===" in body
+    assert "=== END UNTRUSTED USER QUESTION ===" in body
     assert body.rstrip().endswith(
-        "USER PROMPT: Which 3 actions should I take first and why?"
+        "=== END UNTRUSTED USER QUESTION ==="
     )
 
 
@@ -360,14 +364,19 @@ def _schema_envelope() -> dict[str, Any]:
         ],
         "recommendations": [
             {
+                "recommendation_id": "rec_cloud_accounting",
                 "title": "Adopt a cloud accounting tool",
                 "rationale": "Closing the digital readiness gap (cited rule: high_pricing).",
-                "priority": "High",
-                "score_gain": 8,
+                "evidence_refs": ["rule_high_pricing"],
             },
         ],
         "thirty_day_plan": [
-            {"week": 1, "task": "Pick a vendor and sign the contract."},
+            {
+                "week": 1,
+                "task": "Pick a vendor and sign the contract.",
+                "recommendation_ref": "rec_cloud_accounting",
+                "evidence_refs": ["rule_high_pricing"],
+            },
             {"week": 2, "task": "Migrate the chart of accounts."},
         ],
         "assumptions": ["User accepts the projected ROI as an estimate, not a guarantee."],
@@ -388,7 +397,14 @@ def test_schema_validator_accepts_well_formed_payload() -> None:
     assert isinstance(result.response, GroundedResponse)
     assert result.response.executive_summary.startswith("Your business scores")
     assert len(result.response.recommendations) == 1
-    assert result.response.recommendations[0].priority == "High"
+    # H7.8C — the canonical identifier is ``recommendation_id``,
+    # not the model-authored ``priority``. The H7.3 legacy schema
+    # accepted ``priority`` / ``score_gain`` on the recommendation;
+    # the H7.8C schema drops both — those fields are now resolved
+    # server-side from the registry.
+    assert result.response.recommendations[0].recommendation_id == "rec_cloud_accounting"
+    assert result.response.recommendations[0].title == "Adopt a cloud accounting tool"
+    assert result.response.thirty_day_plan[0].recommendation_ref == "rec_cloud_accounting"
     assert result.response.confidence == 72
 
 

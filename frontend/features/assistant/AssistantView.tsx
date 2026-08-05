@@ -79,6 +79,10 @@ function toLocalMessage(m: ChatMessageOut): LocalChatMessage {
       detail: s.detail,
     })),
     kind: undefined,
+    fallback_used: m.fallback_used,
+    generation: m.generation
+      ? (m.generation as unknown as LocalChatMessage["generation"])
+      : undefined,
   };
 }
 
@@ -99,16 +103,23 @@ export function AssistantView() {
     searchConversation,
   } = useAssistantData();
 
-  // Sprint 7 Part 3 (minimal): server-side history toggle.
-  // When off, the page renders the local-first Part 1 chat
-  // unchanged. When on, the user sees a sidebar of server
-  // conversations + the prompt submissions go to the
-  // backend via /api/v1/chat.
-  const [serverHistory, setServerHistory] = useState(false);
+  // H7.8C — server-history defaults to ON. The hybrid AI
+  // path is the primary UX now: the user gets a real
+  // provider answer (Ollama / OpenAI-compatible) with a
+  // three-state trust badge. The local consultant remains
+  // as a last-resort fallback when the backend is unreachable.
+  const [serverHistory, setServerHistory] = useState(true);
   const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
   const [serverLoading, setServerLoading] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
   const [serverMessages, setServerMessages] = useState<ChatMessageOut[]>([]);
+
+  // H7.8C — hybrid AI mode toggle. ``true`` (default) → the
+  // strict evidence-bounded grounded path. ``false`` → the
+  // permissive open-mode path that answers general questions
+  // without grounding. The choice is sent on every
+  // ``appendMessage`` call as the ``mode`` field.
+  const [useGroundedAI, setUseGroundedAI] = useState(true);
 
   // When server-history is off, the local-first path
   // supplies the thread. When on, the server replies
@@ -184,7 +195,9 @@ export function AssistantView() {
     }
     setServerLoading(true);
     try {
-      const resp = await chatService.appendMessage(sessionId, prompt);
+      const resp = await chatService.appendMessage(sessionId, prompt, {
+        mode: useGroundedAI ? "grounded" : "open",
+      });
       setActiveSessionId(resp.session.id);
       setServerMessages([resp.user_message, resp.assistant_message]);
     } catch (err) {
@@ -280,22 +293,45 @@ export function AssistantView() {
           onClear={serverHistory ? handleServerClear : clear}
           messageCount={visibleMessages.length}
           rightSlot={
-            <Button
-              type="button"
-              size="sm"
-              variant={serverHistory ? "default" : "outline"}
-              onClick={() => {
-                setServerHistory((prev) => !prev);
-                setServerError(null);
-              }}
-              aria-pressed={serverHistory}
-              aria-label="Toggle server-side history"
-            >
-              <History className="size-4" aria-hidden="true" />
-              <span className="hidden sm:inline">
-                {serverHistory ? "Server history on" : "Server history"}
-              </span>
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant={useGroundedAI ? "default" : "outline"}
+                onClick={() => {
+                  setUseGroundedAI((prev) => !prev);
+                  setServerError(null);
+                }}
+                aria-pressed={useGroundedAI}
+                aria-label="Toggle grounded AI mode"
+                title={
+                  useGroundedAI
+                    ? "Grounded AI — every claim cites evidence from your business profile."
+                    : "Open-domain LLM — answers general questions without grounding."
+                }
+              >
+                <Sparkles className="size-4" aria-hidden="true" />
+                <span className="hidden sm:inline">
+                  {useGroundedAI ? "Grounded" : "Open-domain"}
+                </span>
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={serverHistory ? "default" : "outline"}
+                onClick={() => {
+                  setServerHistory((prev) => !prev);
+                  setServerError(null);
+                }}
+                aria-pressed={serverHistory}
+                aria-label="Toggle server-side history"
+              >
+                <History className="size-4" aria-hidden="true" />
+                <span className="hidden sm:inline">
+                  {serverHistory ? "Server history on" : "Server history"}
+                </span>
+              </Button>
+            </div>
           }
         />
 

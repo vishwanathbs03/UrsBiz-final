@@ -4,22 +4,15 @@
  * Frontend service for the Sprint 7 Part 3 conversation
  * persistence endpoints.
  *
- * Five calls map 1:1 to the backend routes:
- *
  *   POST   /api/v1/chat                  createSession
  *   GET    /api/v1/chat                  listSessions
  *   GET    /api/v1/chat/{id}             getSession
  *   DELETE /api/v1/chat/{id}             deleteSession
  *   POST   /api/v1/chat/{id}/message     appendMessage
+ *   GET    /api/v1/chat/provider-status  fetchProviderStatus  (H7.8C)
  *
  * Every call goes through the shared `apiClient` so the
  * cookie-based auth and JSON encoding stay in one place.
- *
- * The service is intentionally thin — it does no caching,
- * no retry, no optimistic update. The Sprint 7 Part 1
- * assistant's component-local Conversation stays the
- * default rendering path; the new server-side session
- * is an opt-in layered on top of it.
  */
 
 import { apiClient, ApiError } from "./api-client";
@@ -29,6 +22,38 @@ export interface ChatSource {
   detail: string;
 }
 
+export interface ChatGenerationMeta {
+  provider: string;
+  model: string;
+  mode: "grounded" | "open";
+  fallback_used: boolean;
+  fallback_reason: string | null;
+  generation_method: "generative" | "deterministic";
+  schema_validated: boolean;
+  grounding_validated: boolean;
+  server_grounding_score: number;
+  evidence_count: number;
+  confidence: number | null;
+  assumptions: string[];
+  limitations: string[];
+  evidence_references: string[];
+  generated_at: string;
+  prompt_truncated: boolean;
+  provider_latency_ms: number | null;
+  grounded_payload?: Record<string, unknown> | null;
+}
+
+export interface ChatProviderStatus {
+  configured_provider: string;
+  runtime_provider: string;
+  model: string;
+  available: boolean;
+  schema_required: boolean;
+  fallback_active: boolean;
+  modes: Array<"grounded" | "open">;
+  default_mode: "grounded" | "open";
+}
+
 export interface ChatMessageOut {
   id: number;
   role: "user" | "assistant";
@@ -36,6 +61,25 @@ export interface ChatMessageOut {
   content: string;
   sources: ChatSource[];
   created_at: string;
+  /**
+   * Per-message trust-label flag.
+   *
+   *  - `true`  → the assistant turn came from the deterministic
+   *              fallback / placeholder provider. The UI MUST
+   *              render "Calculated by UrsBiz rule engine".
+   *  - `false` → the assistant turn came from a real
+   *              OpenAI-compatible / Ollama response. The UI
+   *              MAY render "Generated explanation".
+   */
+  fallback_used: boolean;
+  /**
+   * H7.8C — the full provenance envelope. Present for
+   * every assistant turn (whether generative or fallback).
+   * The MessageBubble uses this to render the three-state
+   * trust badge (grounded / open / fallback) and the
+   * TrustMeta disclosure panel.
+   */
+  generation?: ChatGenerationMeta | null;
 }
 
 export interface ChatSessionSummary {
@@ -76,17 +120,38 @@ export const chatService = {
   },
 
   async deleteSession(sessionId: number): Promise<{ deleted: boolean; id: number }> {
-    return apiClient.delete<{ deleted: boolean; id: number }>(`/api/v1/chat/${sessionId}`);
+    return apiClient.delete<{ deleted: boolean; id: number }>(
+      `/api/v1/chat/${sessionId}`
+    );
   },
 
+  /**
+   * Append a user message to a chat session. Returns the
+   * pair (user + assistant) plus the updated session.
+   *
+   * H7.8C — the ``mode`` flag selects grounded vs open
+   * dispatch server-side. The default is ``"grounded"``
+   * (the evidence-bounded path).
+   */
   async appendMessage(
     sessionId: number,
     content: string,
+    opts: { mode?: "grounded" | "open" } = {},
   ): Promise<ChatMessageAppendResponse> {
     return apiClient.post<ChatMessageAppendResponse>(
       `/api/v1/chat/${sessionId}/message`,
-      { content },
+      { content, mode: opts.mode ?? "grounded" },
     );
+  },
+
+  /**
+   * H7.8C — provider status fetch. Returns the configured
+   * provider, runtime provider, model, availability, and
+   * the configured mode list. The endpoint is auth-gated
+   * and never exposes secrets, full URLs, or API keys.
+   */
+  async fetchProviderStatus(): Promise<ChatProviderStatus> {
+    return apiClient.get<ChatProviderStatus>("/api/v1/chat/provider-status");
   },
 };
 

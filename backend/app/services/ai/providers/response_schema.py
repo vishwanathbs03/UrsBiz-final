@@ -7,6 +7,7 @@ The docx requires the generative response to follow this structure:
       "key_findings": [],
       "recommendations": [],
       "thirty_day_plan": [],
+      "scheme_matches": [],
       "assumptions": [],
       "limitations": [],
       "confidence": 0,
@@ -32,6 +33,23 @@ Per docx P3 Part 3: "Validate the model response. When validation fails,
 use the existing deterministic consultant response." That decision lives
 in ``AssistantProviderService.generate`` — this module is the validator
 it consults.
+
+H7.8C changes
+-------------
+
+  * ``Recommendation`` no longer carries model-authored
+    ``priority`` / ``score_gain`` / ``title``. The model now
+    cites a real recommendation ID; the registry supplies the
+    authoritative fields at enrichment time
+    (see ``enrich_with_resolved_fields``).
+  * ``Recommendation`` carries ``evidence_refs`` so the
+    :class:`GroundingValidator` can verify each citation.
+  * ``PlanItem`` carries ``recommendation_ref`` + ``evidence_refs``.
+  * ``SchemeMatch`` is a new section the model can populate
+    with ``scheme_ref`` (a real scheme ID from the registry)
+    plus an explanatory paragraph.
+  * The whole ``GroundedResponse`` is now designed to be
+    validated by ``app.services.ai.providers.grounding_validator``.
 """
 from __future__ import annotations
 
@@ -72,23 +90,63 @@ class KeyFinding:
 
 @dataclass(frozen=True)
 class Recommendation:
-    """One action item. ``rationale`` MUST cite an evidence_reference.
+    """One action item — H7.8C ID-referenced.
 
-    ``priority`` is constrained to a small set so the UI can colour-code.
-    ``score_gain`` is an integer 0..100, never a percent."""
+    H7.8C removes model authority over ``priority`` /
+    ``score_gain`` / ``title`` / ``timeline``. The model
+    cites a real recommendation ID; the registry supplies
+    the authoritative fields at enrichment time. The
+    dataclass still keeps ``title`` and ``rationale`` for
+    backwards compatibility (the model will still author
+    those — they are descriptive, not authoritative), but
+    the validator does NOT use them to score the response.
+    Only ``recommendation_id`` + ``evidence_refs`` are
+    checked.
 
+    ``recommendation_id`` MUST resolve to a registry entry
+    of kind ``recommendation`` (the validator enforces
+    this). ``evidence_refs`` MUST contain at least one ID
+    that resolves.
+    """
+
+    recommendation_id: str
     title: str
     rationale: str
-    priority: str  # "Critical" | "High" | "Medium" | "Low"
-    score_gain: int  # 0..100
+    evidence_refs: tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
 class PlanItem:
-    """One week-by-week task inside the 30-day plan."""
+    """One week-by-week task inside the 30-day plan.
+
+    H7.8C adds ``recommendation_ref`` (optional — a registry
+    entry of kind ``recommendation`` the task implements)
+    and ``evidence_refs`` (registry IDs that justify the
+    task). Tasks without a ``recommendation_ref`` are still
+    permitted; the validator only checks them when present.
+    """
 
     week: int  # 1..4
     task: str
+    recommendation_ref: str | None = None
+    evidence_refs: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class SchemeMatch:
+    """One scheme profile match the model surfaced.
+
+    The model explains why the scheme is a match for the
+    user's profile. The match score and eligibility
+    determination are NOT authored by the model — the
+    registry's ``profile_match_score`` is canonical and is
+    surfaced in the rendered payload without ever being
+    rewritten.
+    """
+
+    scheme_ref: str
+    match_explanation: str
+    evidence_refs: tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
@@ -106,16 +164,30 @@ class EvidenceReference:
 
 @dataclass(frozen=True)
 class GroundedResponse:
-    """The fully validated response envelope."""
+    """The fully validated response envelope.
+
+    H7.8C additions over H7.3:
+
+      * ``scheme_matches`` — populated by the model when it
+        wants to flag a real scheme the user should look up.
+        The validator confirms each ``scheme_ref`` resolves.
+      * ``server_grounding_score`` (0..100) — computed by
+        :class:`GroundingValidator` after the model output
+        is parsed. The wire envelope carries the score so
+        the UI can display confidence as the lower of the
+        model-reported ``confidence`` and the server score.
+    """
 
     executive_summary: str
-    key_findings: tuple[KeyFinding, ...]
-    recommendations: tuple[Recommendation, ...]
-    thirty_day_plan: tuple[PlanItem, ...]
-    assumptions: tuple[str, ...]
-    limitations: tuple[str, ...]
-    confidence: int  # 0..100
-    evidence_references: tuple[EvidenceReference, ...]
+    key_findings: tuple[KeyFinding, ...] = field(default_factory=tuple)
+    recommendations: tuple[Recommendation, ...] = field(default_factory=tuple)
+    thirty_day_plan: tuple[PlanItem, ...] = field(default_factory=tuple)
+    scheme_matches: tuple[SchemeMatch, ...] = field(default_factory=tuple)
+    assumptions: tuple[str, ...] = field(default_factory=tuple)
+    limitations: tuple[str, ...] = field(default_factory=tuple)
+    confidence: int = 0
+    evidence_references: tuple[EvidenceReference, ...] = field(default_factory=tuple)
+    server_grounding_score: int | None = None
 
     # ----- convenience: render for the assistant chat UI -----
 
@@ -142,16 +214,25 @@ class GroundedResponse:
         if self.recommendations:
             lines.append("Recommended next actions")
             for i, r in enumerate(self.recommendations, start=1):
+                ref = f" [{r.recommendation_id}]" if r.recommendation_id else ""
                 lines.append(
-                    f"  {i}. [{r.priority} +{r.score_gain} score] "
-                    f"{r.title} — {r.rationale}"
+                    f"  {i}.{ref} {r.title} — {r.rationale}"
                 )
             lines.append("")
 
         if self.thirty_day_plan:
             lines.append("30-day plan")
             for p in sorted(self.thirty_day_plan, key=lambda x: x.week):
-                lines.append(f"  Week {p.week}: {p.task}")
+                ref = f" [{p.recommendation_ref}]" if p.recommendation_ref else ""
+                lines.append(f"  Week {p.week}{ref}: {p.task}")
+            lines.append("")
+
+        if self.scheme_matches:
+            lines.append("Scheme profile matches")
+            for i, sm in enumerate(self.scheme_matches, start=1):
+                lines.append(
+                    f"  {i}. [{sm.scheme_ref}] {sm.match_explanation}"
+                )
             lines.append("")
 
         if self.assumptions:
@@ -166,6 +247,10 @@ class GroundedResponse:
                 lines.append(f"  - {l}")
             lines.append("")
 
+        if self.server_grounding_score is not None:
+            lines.append(
+                f"Server grounding score: {self.server_grounding_score}/100"
+            )
         lines.append(f"Model confidence: {self.confidence}/100")
         return "\n".join(lines).rstrip()
 
@@ -278,22 +363,33 @@ def parse_model_output(raw_text: str) -> ValidationResult:
     for item in recommendations_raw[:_MAX_LIST_LEN]:
         if not isinstance(item, dict):
             continue
+        # H7.8C — primary identifier is recommendation_id.
+        # We still accept legacy ``id`` for backward
+        # compatibility with H7.3 outputs.
+        rec_id = _clamp_str(
+            item.get("recommendation_id")
+            or item.get("id"),
+            "recommendation.id",
+            errors,
+        )
         title = _clamp_str(item.get("title"), "recommendation.title", errors)
         rationale = _clamp_str(item.get("rationale"), "recommendation.rationale", errors)
-        if not title:
+        refs_raw = item.get("evidence_refs") or []
+        if not isinstance(refs_raw, list):
+            refs_raw = []
+        evidence_refs = tuple(str(r) for r in refs_raw[:_MAX_LIST_LEN])
+        # Drop the row when neither an ID nor a title is
+        # present — the legacy parser dropped only on empty
+        # title. H7.8C drops on empty id AND empty title so
+        # we don't keep a free-text recommendation that
+        # bypasses the registry.
+        if not rec_id and not title:
             continue
-        priority = str(item.get("priority", "Medium") or "Medium")
-        if priority not in _ALLOWED_PRIORITIES:
-            errors.append(f"recommendation.priority not in allowed set: {priority!r}")
-            priority = "Medium"
-        score_gain = _clamp_int(
-            item.get("score_gain"), 0, 100, "recommendation.score_gain", errors,
-        )
         recommendations.append(Recommendation(
+            recommendation_id=rec_id,
             title=title,
             rationale=rationale,
-            priority=priority,
-            score_gain=score_gain,
+            evidence_refs=evidence_refs,
         ))
 
     plan_raw = parsed.get("thirty_day_plan") or []
@@ -308,7 +404,51 @@ def parse_model_output(raw_text: str) -> ValidationResult:
         task = _clamp_str(item.get("task"), "plan.task", errors)
         if not task:
             continue
-        plan.append(PlanItem(week=week, task=task))
+        rec_ref = _clamp_str(
+            item.get("recommendation_ref"),
+            "plan.recommendation_ref",
+            errors,
+        )
+        refs_raw = item.get("evidence_refs") or []
+        if not isinstance(refs_raw, list):
+            refs_raw = []
+        plan.append(PlanItem(
+            week=week,
+            task=task,
+            recommendation_ref=rec_ref or None,
+            evidence_refs=tuple(str(r) for r in refs_raw[:_MAX_LIST_LEN]),
+        ))
+
+    scheme_raw = parsed.get("scheme_matches") or []
+    if not isinstance(scheme_raw, list):
+        errors.append("scheme_matches is not a list")
+        scheme_raw = []
+    scheme_matches: list[SchemeMatch] = []
+    for item in scheme_raw[:_MAX_LIST_LEN]:
+        if not isinstance(item, dict):
+            continue
+        sref = _clamp_str(
+            item.get("scheme_ref") or item.get("id"),
+            "scheme.scheme_ref",
+            errors,
+        )
+        if not sref:
+            continue
+        explanation = _clamp_str(
+            item.get("match_explanation")
+            or item.get("explanation")
+            or item.get("rationale"),
+            "scheme.match_explanation",
+            errors,
+        )
+        refs_raw = item.get("evidence_refs") or []
+        if not isinstance(refs_raw, list):
+            refs_raw = []
+        scheme_matches.append(SchemeMatch(
+            scheme_ref=sref,
+            match_explanation=explanation,
+            evidence_refs=tuple(str(r) for r in refs_raw[:_MAX_LIST_LEN]),
+        ))
 
     assumptions = _string_list(
         parsed.get("assumptions"), "assumptions", errors,
@@ -355,6 +495,7 @@ def parse_model_output(raw_text: str) -> ValidationResult:
         key_findings=tuple(key_findings),
         recommendations=tuple(recommendations),
         thirty_day_plan=tuple(plan),
+        scheme_matches=tuple(scheme_matches),
         assumptions=assumptions,
         limitations=limitations,
         confidence=confidence,

@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 import type { ChatMessage as ChatMessageModel } from "./types";
 import { ConsultantRenderer } from "./ConsultantRenderer";
 import { formatAssistantBody } from "./AssistantRenderer";
-import { TrustBadge } from "./TrustBadge";
+import { TrustBadge, TrustMeta, type TrustLabel } from "./TrustBadge";
 
 interface MessageBubbleProps {
   message: ChatMessageModel;
@@ -139,11 +139,38 @@ export function MessageBubble({
         {!isUser && !isStructured && (
           <FollowUpChips message={message} />
         )}
-        {/* H7.3 — Docx Prompt 3 Part 4: every assistant bubble carries
-            a "Generated explanation" trust label so the user can tell
-            generative content from deterministic rule-engine output. */}
+        {/* H7.8C — three-state trust badge + TrustMeta disclosure.
+            The provider source-of-truth is the per-message
+            ``generation`` envelope. We derive the badge label from
+            it; we never infer from text heuristics.
+
+            1. ``generation.fallback_used === true`` → rule_engine
+            2. ``generation.mode === "open"`` (LLM-answered) → open_domain
+            3. ``generation.grounding_validated === true`` → generated
+            4. fall back to the legacy ``message.fallback_used`` flag
+               for messages without a generation envelope (the
+               client-side deterministic consultant). */}
         {!isUser && (
-          <TrustBadge label="generated" className="self-start" />
+          <TrustBadge
+            label={deriveTrustLabel(message)}
+            className="self-start"
+          />
+        )}
+        {!isUser && message.generation && (
+          <TrustMeta
+            confidence={message.generation.confidence ?? undefined}
+            assumptions={message.generation.assumptions}
+            limitations={message.generation.limitations}
+            evidence={message.generation.evidence_references}
+            generatedAt={message.generation.generated_at}
+            provider={message.generation.provider}
+            model={message.generation.model}
+            fallbackReason={message.generation.fallback_reason}
+            groundingScore={message.generation.server_grounding_score}
+            promptTruncated={message.generation.prompt_truncated}
+            providerLatencyMs={message.generation.provider_latency_ms ?? undefined}
+            className="self-start"
+          />
         )}
         <time
           dateTime={message.createdAt}
@@ -425,6 +452,34 @@ function TypedBody({ text }: { text: string }) {
 // --------------------------------------------------------------------------- //
 // Helpers                                                                    //
 // --------------------------------------------------------------------------- //
+
+/**
+ * Derive the 3-state trust label from the message envelope.
+ *
+ * H7.8C — the source-of-truth is the ``generation`` envelope
+ * the backend persists. The legacy ``fallback_used`` flag is
+ * used only when the generation envelope is absent (the
+ * client-side deterministic consultant, which never hits the
+ * backend).
+ *
+ * The label derivation is deterministic and safe to log; the
+ * verifier can grep the rendered output for these exact strings.
+ */
+export function deriveTrustLabel(message: ChatMessageModel): TrustLabel {
+  const gen = message.generation;
+  if (gen) {
+    if (gen.fallback_used) return "rule_engine";
+    if (gen.mode === "open") return "open_domain";
+    if (gen.grounding_validated) return "generated";
+    // Fall through: a real provider answered but grounding
+    // didn't validate. Still a generative answer — the user
+    // gets the "generated" badge with a low trust score. We
+    // prefer showing the actual provider over hiding it.
+    return "generated";
+  }
+  // Legacy path: client-side deterministic consultant.
+  return message.fallback_used === false ? "generated" : "rule_engine";
+}
 
 function formatTime(iso: string): string {
   try {

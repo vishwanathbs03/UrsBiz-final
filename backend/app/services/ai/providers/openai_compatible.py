@@ -53,7 +53,10 @@ from app.services.ai.providers.base import (
     AIProviderError,
     AssistantRequest,
     AssistantResponse,
+    GenerationMeta,
     Provider,
+    ProviderHTTPStatusError,
+    ProviderRateLimitError,
     ProviderTimeoutError,
     ProviderUnavailableError,
 )
@@ -131,20 +134,28 @@ class OpenAICompatibleProvider:
         url = f"{self._base_url}/chat/completions"
         # Cap the user prompt per docx P3 Part 6.
         clipped, was_truncated = cap_user_prompt(request.user_prompt)
-        messages = _to_messages(request, clipped)
+        # H7.8C — pick the right system prompt for the requested mode.
+        # ``grounded`` uses the structured snapshot+registry prompt;
+        # ``open`` uses the permissive open-mode prompt.
+        messages = _to_messages(request, clipped, mode=request.mode)
 
         payload: dict[str, Any] = {
             "model": self._model,
             "messages": messages,
             "temperature": 0.2,
         }
-        if self._require_json:
+        # H7.8C — schema enforcement is gated on both the
+        # provider's ``require_json`` flag AND the request mode.
+        # Open mode always opts out of JSON.
+        if self._require_json and request.mode == "grounded":
             payload["response_format"] = {"type": "json_object"}
 
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
 
+        # H7.8C — measure wall-clock latency for the audit log.
+        started_at = datetime.now(tz=timezone.utc)
         try:
             response = self._client.post(url, json=payload, headers=headers)
         except httpx.ConnectError as exc:
@@ -164,11 +175,18 @@ class OpenAICompatibleProvider:
                 f"openai_compatible HTTP error: {exc}"
             ) from exc
 
+        # H7.8C — map non-2xx to typed errors so the service can
+        # classify 4xx vs 5xx vs rate-limit distinctly.
+        if response.status_code == 429:
+            raise ProviderRateLimitError(
+                f"openai_compatible rate-limited: HTTP 429"
+            )
         if response.status_code >= 400:
             # Trim body to 200 chars; we never log the full upstream body.
-            raise AIProviderError(
+            raise ProviderHTTPStatusError(
                 f"openai_compatible returned HTTP {response.status_code}: "
-                f"{response.text[:200]}"
+                f"{response.text[:200]}",
+                status_code=response.status_code,
             )
 
         try:
@@ -187,7 +205,7 @@ class OpenAICompatibleProvider:
         # When JSON mode is requested, validate against the docx schema.
         # On validation failure we raise AIProviderError so the service
         # can decide to fall back to the deterministic provider.
-        if self._require_json:
+        if self._require_json and request.mode == "grounded":
             result = parse_model_output(body)
             if not result.ok:
                 raise AIProviderError(
@@ -205,12 +223,29 @@ class OpenAICompatibleProvider:
         if was_truncated:
             rendered = rendered + "\n\n(Note: your prompt was truncated to fit the model context.)"
 
+        # H7.8C — record wall-clock latency and build a baseline
+        # ``GenerationMeta`` so the UI / provider-status endpoint can
+        # surface the real provider's provenance.
+        latency_ms = int(
+            (datetime.now(tz=timezone.utc) - started_at).total_seconds() * 1000
+        )
+        generation = GenerationMeta.empty(
+            mode=request.mode,
+            provider_used=self.name,
+            model=f"openai_compatible:{self._model}",
+            provider_latency_ms=latency_ms,
+            fallback_used=False,
+            prompt_truncated=was_truncated,
+            generation_method="generative",
+        )
         return AssistantResponse(
             body=rendered,
             model=f"openai_compatible:{self._model}",
             fallback_used=False,
             provider_used=self.name,
             generated_at=datetime.now(tz=timezone.utc).isoformat(),
+            provider_latency_ms=latency_ms,
+            generation=generation,
             twin_generated_at=request.context.twin_generated_at,
             recommendations_generated_at=request.context.recommendations_generated_at,
             roadmap_generated_at=request.context.roadmap_generated_at,
@@ -264,14 +299,23 @@ class OpenAICompatibleProvider:
 # --------------------------------------------------------------------------- #
 
 
-def _to_messages(request: AssistantRequest, clipped_prompt: str) -> list[dict[str, str]]:
+def _to_messages(
+    request: AssistantRequest,
+    clipped_prompt: str,
+    *,
+    mode: str = "grounded",
+) -> list[dict[str, str]]:
     """Translate the AssistantRequest into a ``messages[]`` payload.
 
     The order is fixed: system, then conversation history (caller-bounded),
     then the user turn.
+
+    H7.8C — the system prompt is mode-aware (``grounded`` vs
+    ``open``). The provider passes ``request.mode`` here so the
+    right contract is selected.
     """
     out: list[dict[str, str]] = [
-        {"role": "system", "content": AssistantPromptBuilder.system_message()},
+        {"role": "system", "content": AssistantPromptBuilder.system_message(mode)},
     ]
     for turn in request.history:
         role = turn.role if turn.role in ("user", "assistant") else "user"

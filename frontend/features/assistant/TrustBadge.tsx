@@ -3,11 +3,16 @@
 /**
  * TrustBadge — H7.3 (Docx Prompt 3 Part 4) visible trust labels.
  *
- * The docx requires the assistant UI to distinguish the five
+ * H7.8C extends the badge with a sixth category:
+ *
+ *   - "Open-domain LLM — not grounded"      permissive mode
+ *
+ * The docx requires the assistant UI to distinguish the
  * trust categories a user can see:
  *
  *   - "Calculated by UrsBiz rule engine"     deterministic scoring
- *   - "Generated explanation"                 LLM synthesis
+ *   - "Generated explanation"                 LLM synthesis (grounded)
+ *   - "Open-domain LLM — not grounded"        open-mode LLM (H7.8C)
  *   - "Scenario estimate"                     forecast / projection
  *   - "Official external source"              government scheme data
  *   - "User-provided information"             inputs the user entered
@@ -18,12 +23,13 @@
  * without false negatives. No emoji / no flourish; the
  * badge is information, not decoration.
  */
-import { BadgeCheck, Cpu, Sparkles, TrendingUp, User } from "lucide-react";
+import { BadgeCheck, Cpu, Globe, Sparkles, TrendingUp, User } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export type TrustLabel =
   | "rule_engine"
   | "generated"
+  | "open_domain"
   | "scenario"
   | "official"
   | "user_provided";
@@ -41,6 +47,11 @@ const COPY: Record<
     text: "Generated explanation",
     icon: Sparkles,
     tone: "bg-violet-500/10 text-violet-700 border-violet-500/30",
+  },
+  open_domain: {
+    text: "Open-domain LLM — not grounded",
+    icon: Globe,
+    tone: "bg-amber-500/10 text-amber-700 border-amber-500/30",
   },
   scenario: {
     text: "Scenario estimate",
@@ -89,7 +100,7 @@ export function TrustBadge({
 /**
  * TrustMeta — H7.3 (Docx Prompt 3 Part 4) required metadata block.
  *
- * Renders the four docx-required fields under every assistant
+ * Renders the docx-required fields under every assistant
  * bubble when the model produced the response:
  *
  *   - Confidence         (0..100)
@@ -97,6 +108,15 @@ export function TrustBadge({
  *   - Limitations        (string list, never empty when present)
  *   - Evidence           (string list of evidence_reference ids)
  *   - Last updated       (ISO timestamp)
+ *
+ * H7.8C extends with the provider/model disclosure the
+ * hybrid-mode envelope carries:
+ *
+ *   - Provider + model   ("openai_compatible:llama3.1")
+ *   - Grounding score    (0..100 from the GroundingValidator)
+ *   - Provider latency   (milliseconds)
+ *   - Prompt truncated   (boolean — the user-prompt was clipped)
+ *   - Fallback reason    (the normalized reason, only when fallback_used=true)
  *
  * The block is collapsed by default — the docx says
  * "Display: Confidence, Assumptions, Limitations, Evidence,
@@ -109,6 +129,12 @@ export function TrustMeta({
   limitations,
   evidence,
   generatedAt,
+  provider,
+  model,
+  fallbackReason,
+  groundingScore,
+  promptTruncated,
+  providerLatencyMs,
   className,
 }: {
   confidence?: number;
@@ -117,6 +143,20 @@ export function TrustMeta({
   evidence?: readonly string[];
   /** ISO 8601 timestamp from the upstream payload. */
   generatedAt?: string;
+  /** H7.8C — provider name (e.g. "openai_compatible"). Never
+   *  includes the base URL or API key. */
+  provider?: string;
+  /** H7.8C — model identifier (e.g. "openai_compatible:llama3.1"). */
+  model?: string;
+  /** H7.8C — fallback reason code. Rendered only when present. */
+  fallbackReason?: string | null;
+  /** H7.8C — server grounding score 0..100. */
+  groundingScore?: number;
+  /** H7.8C — whether the user prompt was truncated to fit the
+   *  provider's context window. */
+  promptTruncated?: boolean;
+  /** H7.8C — provider round-trip latency in ms. */
+  providerLatencyMs?: number;
   className?: string;
 }) {
   return (
@@ -131,6 +171,39 @@ export function TrustMeta({
         Why am I seeing this?
       </summary>
       <div className="mt-2 space-y-2 text-foreground/80">
+        {provider || model ? (
+          <p>
+            <span className="font-semibold">Provider:</span>{" "}
+            {provider ?? "unknown"}
+            {model ? ` (${model})` : null}
+            {typeof providerLatencyMs === "number" ? (
+              <span className="text-muted-foreground">
+                {" "}
+                · {providerLatencyMs} ms
+              </span>
+            ) : null}
+          </p>
+        ) : null}
+        {typeof groundingScore === "number" ? (
+          <p>
+            <span className="font-semibold">Grounding score:</span>{" "}
+            {Math.max(0, Math.min(100, groundingScore))}/100
+          </p>
+        ) : null}
+        {fallbackReason ? (
+          <p>
+            <span className="font-semibold">Fallback reason:</span>{" "}
+            <code className="rounded bg-secondary px-1 text-[10px]">
+              {fallbackReason}
+            </code>
+          </p>
+        ) : null}
+        {promptTruncated ? (
+          <p className="text-amber-700">
+            <span className="font-semibold">Note:</span> the user
+            prompt was truncated to fit the model context window.
+          </p>
+        ) : null}
         {typeof confidence === "number" ? (
           <p>
             <span className="font-semibold">Confidence:</span>{" "}

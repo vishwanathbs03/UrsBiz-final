@@ -1,4 +1,4 @@
-"""Shared types for the AI Provider Layer — Sprint 7 Part 2.
+"""Shared types for the AI Provider Layer — Sprint 7 Part 2 + H7.8C.
 
 The package is the seam between the assistant UI (Sprint 7 Part 1)
 and a real LLM. The seam is the ``Provider`` Protocol — every
@@ -17,11 +17,59 @@ The wire-format envelopes (Pydantic) live in :mod:`app.schemas.*`
 when a future milestone wires an HTTP endpoint to this layer. For
 this milestone the layer is consumed by other backend services and
 by the verifier — there is no public HTTP surface yet.
+
+H7.8C additions
+---------------
+
+  * :class:`Mode` — ``"grounded"`` (H7.8C as written: evidence-
+    bounded, no internet, no inventing) or ``"open"`` (a separate
+    permissive mode for general questions). Default ``"grounded"``.
+  * :class:`GenerationMeta` — every assistant turn carries the
+    full provenance envelope (provider, model, fallback_used,
+    fallback_reason, generation_method, schema_validated,
+    grounding_validated, confidence, evidence_count, latency …).
+  * :data:`NormalizedReason` — the 12-value enum the service uses
+    to label the deterministic fallback path.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from datetime import datetime, timezone
+from typing import Any, Literal, Protocol
+
+
+# --------------------------------------------------------------------------- #
+# Modes and normalized reasons
+# --------------------------------------------------------------------------- #
+
+
+# Two assistant modes. ``grounded`` is the H7.8C evidence-bounded
+# default; ``open`` is a permissive mode for general questions that
+# explicitly bypasses the evidence registry and grounding
+# validator. The UI shows different trust labels for the two.
+Mode = Literal["grounded", "open"]
+
+
+# The exhaustive list of reasons the deterministic fallback may
+# be invoked. The service stamps one of these on
+# ``AssistantResponse.fallback_reason`` and on the persisted
+# ``ChatMessage.generation_meta_json``. Adding a new value is
+# non-breaking (existing clients ignore unknown strings); renaming
+# or removing a value is breaking.
+NormalizedReason = Literal[
+    "provider_unavailable",
+    "timeout",
+    "rate_limited",
+    "provider_error",
+    "http_4xx",
+    "http_5xx",
+    "malformed_response",
+    "empty_response",
+    "schema_invalid",
+    "grounding_invalid",
+    "not_configured",
+    "open_mode_provider_failure",
+]
 
 
 # --------------------------------------------------------------------------- #
@@ -59,6 +107,38 @@ class ProviderTimeoutError(AIProviderError):
     for the first call on a cold start; the timeout is a guard,
     not a feature.
     """
+
+
+class ProviderHTTPStatusError(AIProviderError):
+    """The configured provider returned a non-2xx HTTP response.
+
+    H7.8C — providers raise this for HTTP 4xx / 5xx so the
+    service layer can map the status code to the right
+    :data:`NormalizedReason` (``http_4xx`` or ``http_5xx``).
+    The original status is carried on :attr:`status_code` so
+    the service can distinguish 401 (auth) from 429 (rate
+    limit) without re-sniffing the message body.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = int(status_code)
+
+
+class ProviderRateLimitError(ProviderHTTPStatusError):
+    """Specialised 429 — the provider is asking us to back off.
+
+    Surfaces as ``fallback_reason="rate_limited"`` rather than
+    the generic ``http_4xx``.
+    """
+
+    def __init__(self, message: str = "rate limited") -> None:
+        super().__init__(message, status_code=429)
 
 
 # --------------------------------------------------------------------------- #
@@ -208,11 +288,11 @@ class AssistantContext:
     overall_business_score: int
     band: str
     dna: AssistantContextDna
-    scores: tuple[AssistantContextScore, ...]
-    recommendations: tuple[AssistantContextRecommendation, ...]
-    roadmap: tuple[AssistantContextRoadmap, ...]
-    rules: tuple[AssistantContextRule, ...]
-    insights: tuple[AssistantContextInsight, ...]
+    scores: tuple[AssistantContextScore, ...] = field(default_factory=tuple)
+    recommendations: tuple[AssistantContextRecommendation, ...] = field(default_factory=tuple)
+    roadmap: tuple[AssistantContextRoadmap, ...] = field(default_factory=tuple)
+    rules: tuple[AssistantContextRule, ...] = field(default_factory=tuple)
+    insights: tuple[AssistantContextInsight, ...] = field(default_factory=tuple)
     # H7.3 — docx P3 Part 2 evidence-bundle extension.
     # Optional: callers that don't supply them see empty tuples.
     schemes: tuple[AssistantContextScheme, ...] = field(default_factory=tuple)
@@ -269,11 +349,140 @@ class AssistantRequest:
     context: AssistantContext
     history: tuple[AssistantTurn, ...] = field(default_factory=tuple)
     knowledge: object | None = None
+    mode: Mode = "grounded"
 
 
 # --------------------------------------------------------------------------- #
 # Response — what every provider must return
 # --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class GenerationMeta:
+    """The full provenance envelope for an assistant turn.
+
+    Persisted as JSON on every assistant message via the
+    ``chat_messages.generation_meta_json`` column (added in
+    migration ``20260101_0007``). The wire mirror lives in
+    ``backend/app/schemas/chat.py`` as ``ChatGenerationMeta``.
+
+    Semantics
+    ---------
+
+    Real provider success::
+
+        generation_method = "generative"
+        fallback_used = False
+        fallback_reason = None
+        schema_validated = True
+        grounding_validated = True   (grounded mode only)
+
+    Deterministic fallback::
+
+        generation_method = "deterministic"
+        fallback_used = True
+        fallback_reason = one of the NormalizedReason values
+        schema_validated = True      (the fallback body is well-formed)
+        grounding_validated = True   (the fallback is grounded by construction)
+        server_grounding_score = 100
+
+    Open-mode generative::
+
+        generation_method = "generative"
+        fallback_used = False
+        schema_validated = False     (no JSON contract enforced)
+        grounding_validated = False  (no registry built)
+        mode = "open"
+    """
+
+    provider: str
+    model: str
+    mode: Mode
+    fallback_used: bool
+    fallback_reason: NormalizedReason | None
+    generation_method: Literal["generative", "deterministic"]
+    schema_validated: bool
+    grounding_validated: bool
+    server_grounding_score: int
+    evidence_count: int
+    confidence: int | None
+    assumptions: tuple[str, ...]
+    limitations: tuple[str, ...]
+    evidence_references: tuple[str, ...]
+    generated_at: str
+    prompt_truncated: bool
+    provider_latency_ms: int | None
+    # When mode == "open", ``grounded_payload`` is None. When
+    # mode == "grounded" and the response was real + grounded,
+    # it carries the validated, server-enriched structured
+    # payload (kept here so the renderer does not need a
+    # second fetch).
+    grounded_payload: dict | None
+
+    @staticmethod
+    def empty(
+        *,
+        mode: Mode,
+        provider_used: str,
+        model: str,
+        provider_latency_ms: int | None,
+        fallback_used: bool,
+        fallback_reason: NormalizedReason | None = None,
+        generation_method: Literal["generative", "deterministic"] = "generative",
+        schema_validated: bool = False,
+        grounding_validated: bool = False,
+        server_grounding_score: int = 0,
+        evidence_count: int = 0,
+        confidence: int | None = None,
+        assumptions: tuple[str, ...] = (),
+        limitations: tuple[str, ...] = (),
+        evidence_references: tuple[str, ...] = (),
+        generated_at: str | None = None,
+        prompt_truncated: bool = False,
+        grounded_payload: dict | None = None,
+    ) -> "GenerationMeta":
+        """Return a default-valued GenerationMeta.
+
+        Used by the service to mint a baseline envelope before
+        the validator + grounding pipeline enrich it. The
+        defaults are *empty* — the caller is expected to
+        ``.merge(...)`` additional fields on top.
+        """
+        return GenerationMeta(
+            provider=provider_used,
+            model=model,
+            mode=mode,
+            fallback_used=fallback_used,
+            fallback_reason=fallback_reason,
+            generation_method=generation_method,
+            schema_validated=schema_validated,
+            grounding_validated=grounding_validated,
+            server_grounding_score=server_grounding_score,
+            evidence_count=evidence_count,
+            confidence=confidence,
+            assumptions=assumptions,
+            limitations=limitations,
+            evidence_references=evidence_references,
+            generated_at=generated_at or _now_iso(),
+            prompt_truncated=prompt_truncated,
+            provider_latency_ms=provider_latency_ms,
+            grounded_payload=grounded_payload,
+        )
+
+    def merge(self, **overrides: Any) -> "GenerationMeta":
+        """Return a copy with selected fields overridden.
+
+        Used by the validator / grounding pipeline to enrich
+        the envelope after the provider has stamped its
+        initial values, without us having to list every
+        keyword on every call.
+        """
+        from dataclasses import asdict, replace
+        current = asdict(self)
+        for key, value in overrides.items():
+            if key in current and value is not None:
+                current[key] = value
+        return GenerationMeta(**current)
 
 
 @dataclass(frozen=True)
@@ -290,6 +499,21 @@ class AssistantResponse:
     produced the response. When ``fallback_used`` is True, this
     is the deterministic fallback's name; otherwise it equals
     ``model``.
+
+    ``fallback_reason`` (H7.8C) is one of the
+    :data:`NormalizedReason` values when ``fallback_used`` is
+    True, else ``None``. The value is the canonical label a
+    judge-facing report can quote.
+
+    ``generation`` (H7.8C) is the full provenance envelope.
+    It is non-None on every real-provider or fallback response
+    the service emits — the only case where it is None is the
+    legacy mock-provider path the legacy ``/ai`` decision
+    endpoint still uses.
+
+    ``provider_latency_ms`` (H7.8C) is the wall-clock duration
+    of the upstream provider call. ``None`` when the response
+    came from the deterministic fallback (no upstream call).
     """
 
     body: str
@@ -297,6 +521,9 @@ class AssistantResponse:
     fallback_used: bool
     provider_used: str
     generated_at: str
+    fallback_reason: NormalizedReason | None = None
+    provider_latency_ms: int | None = None
+    generation: GenerationMeta | None = None
     # Sidecar — context timestamps echoed so the response is
     # self-describing in logs / debugging.
     twin_generated_at: str | None = None
@@ -409,14 +636,57 @@ class DeterministicFallbackProvider:
     def is_available(self) -> bool:
         return True
 
-    def complete(self, request: AssistantRequest) -> AssistantResponse:
+    def complete(
+        self,
+        request: AssistantRequest,
+        *,
+        reason: NormalizedReason | None = None,
+    ) -> AssistantResponse:
+        """Render the deterministic fallback body.
+
+        ``reason`` (H7.8C) is the :data:`NormalizedReason`
+        label the service layer decided on. When ``None``
+        the placeholder ``"not_configured"`` is used — true
+        for the case where no real provider was ever wired
+        (default factory selection on a fresh install).
+        """
         body = _fallback_body(request)
+        reason = reason or "not_configured"
+        generated_at = _now_iso()
+        gen = GenerationMeta(
+            provider=self.name,
+            model=self.name,
+            mode=request.mode,
+            fallback_used=True,
+            fallback_reason=reason,
+            generation_method="deterministic",
+            schema_validated=True,
+            grounding_validated=True,
+            server_grounding_score=100,
+            evidence_count=len(request.context.recommendations)
+            + len(request.context.scores)
+            + len(request.context.rules)
+            + len(request.context.schemes)
+            + len(request.context.forecasts)
+            + len(request.context.action_items),
+            confidence=None,
+            assumptions=(),
+            limitations=(),
+            evidence_references=(),
+            generated_at=generated_at,
+            prompt_truncated=False,
+            provider_latency_ms=None,
+            grounded_payload=None,
+        )
         return AssistantResponse(
             body=body,
             model=self.name,
             fallback_used=True,
             provider_used=self.name,
-            generated_at=_now_iso(),
+            generated_at=generated_at,
+            fallback_reason=reason,
+            provider_latency_ms=None,
+            generation=gen,
             twin_generated_at=request.context.twin_generated_at,
             recommendations_generated_at=request.context.recommendations_generated_at,
             roadmap_generated_at=request.context.roadmap_generated_at,

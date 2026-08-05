@@ -168,3 +168,81 @@ class ProviderFactory:
         ``AssistantResponse.provider_used`` for that.
         """
         return self._provider_name()
+
+    def configured_model(self) -> str:
+        """Return the configured model identifier.
+
+        ``"ollama"`` → ``Settings.ollama_model`` (default
+        ``"llama3.1"``). ``"openai_compatible"`` →
+        ``Settings.ai_model``. Any other provider name → ``""``.
+        """
+        name = self._provider_name()
+        if name == "ollama":
+            return str(
+                getattr(self._settings, "ollama_model", "llama3.1") or "llama3.1"
+            ).strip()
+        if name == "openai_compatible":
+            return str(
+                getattr(self._settings, "ai_model", "") or ""
+            ).strip()
+        return ""
+
+    def is_available(self) -> bool:
+        """Return True iff the configured real provider can be reached.
+
+        The check runs the same path ``build()`` would: a real
+        Ollama / OpenAI-compatible ping. A failed ping returns
+        False; the factory's ``build()`` will return the
+        deterministic fallback in that case.
+
+        This is the signal the
+        ``GET /api/v1/chat/provider-status`` endpoint surfaces.
+        """
+        name = self._provider_name()
+        if name == "ollama":
+            base_url = str(
+                getattr(self._settings, "ollama_base_url", "") or ""
+            ).strip()
+            if not base_url:
+                return False
+            try:
+                provider = OllamaProvider(
+                    base_url=base_url,
+                    model=str(
+                        getattr(self._settings, "ollama_model", "llama3.1")
+                        or "llama3.1"
+                    ).strip(),
+                    timeout=5.0,
+                )
+                ok = provider.ping()
+                provider.close()
+                return ok
+            except Exception:
+                return False
+        if name == "openai_compatible":
+            base_url = str(
+                getattr(self._settings, "ai_base_url", "") or ""
+            ).strip()
+            model = str(
+                getattr(self._settings, "ai_model", "") or ""
+            ).strip()
+            if not base_url or not model:
+                return False
+            try:
+                provider = OpenAICompatibleProvider(
+                    base_url=base_url,
+                    model=model,
+                    api_key=str(
+                        getattr(self._settings, "ai_api_key", "") or ""
+                    ).strip(),
+                    timeout=5.0,
+                    require_json=bool(
+                        getattr(self._settings, "ai_require_schema", True)
+                    ),
+                )
+                ok = provider.ping()
+                provider.close()
+                return ok
+            except Exception:
+                return False
+        return False
