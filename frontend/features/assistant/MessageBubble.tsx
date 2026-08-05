@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import type { ChatMessage as ChatMessageModel } from "./types";
 import { ConsultantRenderer } from "./ConsultantRenderer";
 import { formatAssistantBody } from "./AssistantRenderer";
+import { TrustBadge } from "./TrustBadge";
 
 interface MessageBubbleProps {
   message: ChatMessageModel;
@@ -137,6 +138,12 @@ export function MessageBubble({
         )}
         {!isUser && !isStructured && (
           <FollowUpChips message={message} />
+        )}
+        {/* H7.3 — Docx Prompt 3 Part 4: every assistant bubble carries
+            a "Generated explanation" trust label so the user can tell
+            generative content from deterministic rule-engine output. */}
+        {!isUser && (
+          <TrustBadge label="generated" className="self-start" />
         )}
         <time
           dateTime={message.createdAt}

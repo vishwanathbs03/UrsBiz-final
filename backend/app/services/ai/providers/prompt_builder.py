@@ -158,6 +158,39 @@ class AssistantPromptBuilder:
                     f"{ins.title}"
                 )
 
+        # H7.3 — docx P3 Part 2 evidence-bundle extension.
+        # Schemes, scenarios (labelled "scenario estimate", never
+        # "prediction"), and the user's existing action-board items.
+        if ctx.schemes:
+            parts.append("")
+            parts.append("GOVERNMENT SCHEMES (profile-match, never eligibility)")
+            for s in sorted(ctx.schemes, key=lambda x: -x.profile_match_score):
+                parts.append(
+                    f"- {s.scheme_id} match={s.profile_match_score} "
+                    f"authority='{s.authority}' title='{s.title}' "
+                    f"verified={s.last_verified_date} link={s.application_url}"
+                )
+
+        if ctx.forecasts:
+            parts.append("")
+            parts.append("SCENARIO ESTIMATES (not predictions)")
+            for f in ctx.forecasts:
+                parts.append(
+                    f"- {f.scenario_id} horizon='{f.horizon_label}' "
+                    f"revenue_delta={f.revenue_delta:.0f} "
+                    f"score_delta={f.score_delta:+d} "
+                    f"confidence={f.confidence} assumptions='{f.assumption_summary}'"
+                )
+
+        if ctx.action_items:
+            parts.append("")
+            parts.append("USER ACTION BOARD (existing tasks)")
+            for a in ctx.action_items:
+                parts.append(
+                    f"- {a.action_id} [{a.priority} {a.status}] "
+                    f"due_in_days={a.due_in_days} {a.title}"
+                )
+
         if request.history:
             parts.append("")
             parts.append("CONVERSATION HISTORY")

@@ -33,11 +33,14 @@ from typing import Any
 
 from app.services.ai.providers.base import (
     AssistantContext,
+    AssistantContextActionItem,
     AssistantContextDna,
+    AssistantContextForecast,
     AssistantContextInsight,
     AssistantContextRecommendation,
     AssistantContextRoadmap,
     AssistantContextRule,
+    AssistantContextScheme,
     AssistantContextScore,
 )
 
@@ -51,6 +54,10 @@ _MAX_RECOMMENDATIONS = 12
 _MAX_ROADMAP = 12
 _MAX_RULES = 12
 _MAX_INSIGHTS = 8
+# H7.3 — docx P3 Part 2 evidence-bundle extension caps.
+_MAX_SCHEMES = 8
+_MAX_FORECASTS = 4
+_MAX_ACTION_ITEMS = 6
 
 
 class AssistantContextBuilder:
@@ -80,12 +87,19 @@ class AssistantContextBuilder:
         roadmap_provider,
         rules_provider,
         insights_provider,
+        schemes_provider=None,
+        forecast_provider=None,
+        action_board_provider=None,
     ) -> None:
         self._twin = twin_provider
         self._recs = recommendations_provider
         self._roadmap = roadmap_provider
         self._rules = rules_provider
         self._insights = insights_provider
+        # H7.3 — optional. None is treated as "no data".
+        self._schemes = schemes_provider or (lambda _owner: {})
+        self._forecast = forecast_provider or (lambda _owner: {})
+        self._action_board = action_board_provider or (lambda _owner: {})
 
     def build(self, *, owner_id: int) -> AssistantContext:
         twin = self._twin(owner_id)
@@ -93,6 +107,9 @@ class AssistantContextBuilder:
         roadmap = self._roadmap(owner_id)
         rules = self._rules(owner_id)
         decision = self._insights(owner_id)
+        schemes = self._schemes(owner_id)
+        forecast = self._forecast(owner_id)
+        action_board = self._action_board(owner_id)
 
         return AssistantContext(
             business_id=int(owner_id),
@@ -104,12 +121,19 @@ class AssistantContextBuilder:
             roadmap=_project_roadmap(roadmap),
             rules=_project_rules(rules),
             insights=_project_insights(decision),
+            schemes=_project_schemes(schemes),
+            forecasts=_project_forecasts(forecast),
+            action_items=_project_action_items(action_board),
             twin_generated_at=twin.get("generated_at") if isinstance(twin, dict) else None,
             recommendations_generated_at=recs.get("generated_at") if isinstance(recs, dict) else None,
             roadmap_generated_at=roadmap.get("generated_at") if isinstance(roadmap, dict) else None,
             rules_generated_at=rules.get("generated_at") if isinstance(rules, dict) else None,
             insights_generated_at=(decision.get("generated_at")
                                    if isinstance(decision, dict) else None),
+            schemes_generated_at=schemes.get("generated_at") if isinstance(schemes, dict) else None,
+            forecasts_generated_at=forecast.get("generated_at") if isinstance(forecast, dict) else None,
+            action_items_generated_at=(action_board.get("generated_at")
+                                       if isinstance(action_board, dict) else None),
         )
 
 
@@ -302,6 +326,126 @@ def _project_insights(decision: Any) -> tuple[AssistantContextInsight, ...]:
             title=str(ins.get("title", "") or ""),
             priority=str(ins.get("priority", "Medium") or "Medium"),
             confidence=_safe_int(ins.get("confidence")),
+        ))
+    return tuple(out)
+
+
+# --------------------------------------------------------------------------- #
+# H7.3 — evidence-bundle extension projectors (schemes, forecast, action_board)
+# --------------------------------------------------------------------------- #
+#
+# These follow the existing pattern: defensive projection against
+# upstream shape drift, no re-derivation. Each upstream service may
+# surface its data under several keys; we try the most likely ones.
+
+
+def _project_schemes(payload: Any) -> tuple[AssistantContextScheme, ...]:
+    """Project the scheme catalog payload into LLM-visible records.
+
+    Accepts payloads shaped like the BusinessSchemesResponse from
+    ``SchemeRecommendationEngine.compute`` (a dict with a
+    ``schemes`` list). Tolerates alternative keys like
+    ``recommended`` / ``catalog``. Always returns the trust
+    fields the model needs to cite a scheme; never the
+    eligibility verdict.
+    """
+    if not isinstance(payload, dict):
+        return ()
+    items = (
+        payload.get("schemes")
+        or payload.get("recommended")
+        or payload.get("catalog")
+        or []
+    )
+    if not isinstance(items, list):
+        return ()
+    out: list[AssistantContextScheme] = []
+    for raw in items[:_MAX_SCHEMES]:
+        if not isinstance(raw, dict):
+            continue
+        scheme_id = str(raw.get("scheme_id") or raw.get("id") or "").strip()
+        if not scheme_id:
+            continue
+        out.append(AssistantContextScheme(
+            scheme_id=scheme_id,
+            title=str(raw.get("title") or raw.get("scheme_name") or scheme_id),
+            authority=str(raw.get("authority") or raw.get("ministry") or ""),
+            application_url=str(raw.get("application_url") or raw.get("official_link") or ""),
+            profile_match_score=_safe_int(raw.get("profile_match_score") or raw.get("match_score")),
+            last_verified_date=str(
+                raw.get("last_verified_date")
+                or raw.get("last_verified")
+                or raw.get("verified_at")
+                or ""
+            ),
+        ))
+    return tuple(out)
+
+
+def _project_forecasts(payload: Any) -> tuple[AssistantContextForecast, ...]:
+    """Project the scenario / forecast payload into LLM-visible records.
+
+    Accepts payloads shaped like ``ScenarioService.simulate`` (a dict
+    with a ``scenarios`` list) or ``RevenuePredictionResponse`` (a
+    dict with a ``forecast`` block). Always surfaces the data as a
+    *scenario estimate* — never as a prediction.
+    """
+    if not isinstance(payload, dict):
+        return ()
+    items = (
+        payload.get("scenarios")
+        or payload.get("forecast")
+        or payload.get("projections")
+        or []
+    )
+    if not isinstance(items, list):
+        # Some payloads wrap a single object in 'forecast' or 'primary'.
+        single = payload.get("forecast") or payload.get("primary")
+        if isinstance(single, dict):
+            items = [single]
+        else:
+            return ()
+    out: list[AssistantContextForecast] = []
+    for raw in items[:_MAX_FORECASTS]:
+        if not isinstance(raw, dict):
+            continue
+        sid = str(raw.get("scenario_id") or raw.get("id") or "primary").strip()
+        out.append(AssistantContextForecast(
+            scenario_id=sid,
+            horizon_label=str(raw.get("horizon_label") or raw.get("horizon") or "scenario"),
+            revenue_delta=_safe_float(raw.get("revenue_delta") or raw.get("revenue_change")),
+            score_delta=_safe_int(raw.get("score_delta") or raw.get("score_change")),
+            assumption_summary=str(raw.get("assumption_summary") or raw.get("assumptions") or ""),
+            confidence=_safe_int(raw.get("confidence")),
+        ))
+    return tuple(out)
+
+
+def _project_action_items(payload: Any) -> tuple[AssistantContextActionItem, ...]:
+    """Project the action-board payload into LLM-visible records."""
+    if not isinstance(payload, dict):
+        return ()
+    items = (
+        payload.get("items")
+        or payload.get("action_items")
+        or payload.get("actions")
+        or []
+    )
+    if not isinstance(items, list):
+        return ()
+    out: list[AssistantContextActionItem] = []
+    for raw in items[:_MAX_ACTION_ITEMS]:
+        if not isinstance(raw, dict):
+            continue
+        aid = str(raw.get("id") or raw.get("action_id") or "").strip()
+        if not aid:
+            continue
+        out.append(AssistantContextActionItem(
+            action_id=aid,
+            title=str(raw.get("title") or ""),
+            status=str(raw.get("status") or "open"),
+            priority=str(raw.get("priority") or "Medium"),
+            due_in_days=_safe_int(raw.get("due_in_days")),
         ))
     return tuple(out)
 

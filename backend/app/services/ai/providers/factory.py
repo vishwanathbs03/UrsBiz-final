@@ -1,4 +1,4 @@
-"""ProviderFactory — Sprint 7 Part 2.
+"""ProviderFactory — Sprint 7 Part 2 + H7.3.
 
 Selects the concrete provider at runtime from
 ``Settings.ai_provider``. Always returns a usable provider —
@@ -8,20 +8,29 @@ returns the deterministic fallback rather than raising.
 Selection rules
 ---------------
 
-  * ``ai_provider == "ollama"``   -> construct :class:`OllamaProvider`
-                                       and ping it. If the ping fails,
-                                       return the deterministic
-                                       fallback instead.
+  * ``ai_provider == "ollama"``             -> construct :class:`OllamaProvider`
+                                                and ping it. If the ping fails,
+                                                return the deterministic
+                                                fallback instead.
+  * ``ai_provider == "openai_compatible"``  -> construct
+                                                :class:`OpenAICompatibleProvider`
+                                                (the H7.3 generic path that
+                                                covers OpenAI, OpenRouter,
+                                                Together, Groq, vLLM, llama.cpp
+                                                server mode, and Ollama's
+                                                ``/v1/chat`` adapter). If the
+                                                ping fails, return the
+                                                deterministic fallback.
   * anything else (including ``"placeholder"``, ``"disabled"``,
-    ``""``, ``None``)              -> return the deterministic
-                                       fallback directly.
+    ``""``, ``None``)                      -> return the deterministic
+                                                fallback directly.
 
 The factory is the *only* place in the layer that decides
 which provider to use. The :class:`AssistantProviderService`
 takes the factory's output and treats it as an opaque
 :class:`Provider` — it never asks which concrete class it got.
 That separation is what keeps the verifier simple: it asks
-the factory for "the ollama-or-fallback provider", looks at
+the factory for "the configured provider or fallback", looks at
 ``provider_used`` on the response, and the rest is opaque.
 """
 from __future__ import annotations
@@ -39,16 +48,18 @@ from app.services.ai.providers.base import (
     ProviderUnavailableError,
 )
 from app.services.ai.providers.ollama import OllamaProvider
+from app.services.ai.providers.openai_compatible import OpenAICompatibleProvider
 
 
 class ProviderFactory:
     """Construct a :class:`Provider` from a Settings-like object.
 
-    The factory accepts any object with the four attributes
+    The factory accepts any object with the relevant attributes
     (``ai_provider``, ``ollama_base_url``, ``ollama_model``,
-    ``ai_request_timeout_seconds``) — this is the same shape
-    :class:`app.config.settings.Settings` exposes. Tests can
-    pass a tiny stub.
+    ``ai_base_url``, ``ai_model``, ``ai_api_key``,
+    ``ai_request_timeout_seconds``, ``ai_require_schema``) — this is
+    the same shape :class:`app.config.settings.Settings` exposes.
+    Tests can pass a tiny stub.
     """
 
     def __init__(self, settings: Any | None = None) -> None:
@@ -61,6 +72,8 @@ class ProviderFactory:
         provider_name = self._provider_name()
         if provider_name == "ollama":
             return self._build_ollama_or_fallback()
+        if provider_name == "openai_compatible":
+            return self._build_openai_compatible_or_fallback()
         # Any other value: deterministic fallback only.
         return DeterministicFallbackProvider()
 
@@ -97,6 +110,51 @@ class ProviderFactory:
             return provider
         # Make sure the unused client is closed so the test
         # runner doesn't leak sockets.
+        provider.close()
+        return DeterministicFallbackProvider()
+
+    def _build_openai_compatible_or_fallback(self) -> Provider:
+        """Build the OpenAI-compatible provider, falling back on failure.
+
+        The settings consumed are the four H7.3 keys:
+
+          * ``ai_base_url``  — required for the real provider.
+          * ``ai_model``     — required for the real provider.
+          * ``ai_api_key``   — optional (local servers ignore auth).
+          * ``ai_require_schema`` — toggle JSON-mode validation.
+
+        If ``ai_base_url`` or ``ai_model`` is empty, the configurable
+        provider is treated as "not configured" and the factory
+        returns the deterministic fallback. Same for any ping failure.
+        """
+        base_url = str(
+            getattr(self._settings, "ai_base_url", "") or ""
+        ).strip()
+        model = str(
+            getattr(self._settings, "ai_model", "") or ""
+        ).strip()
+        api_key = str(
+            getattr(self._settings, "ai_api_key", "") or ""
+        ).strip()
+        timeout = float(
+            getattr(self._settings, "ai_request_timeout_seconds", 60.0) or 60.0
+        )
+        require_json = bool(
+            getattr(self._settings, "ai_require_schema", True)
+        )
+        if not base_url or not model:
+            # Not configured -> fall back silently. Same UX as
+            # an Ollama provider whose URL is empty.
+            return DeterministicFallbackProvider()
+        provider = OpenAICompatibleProvider(
+            base_url=base_url,
+            model=model,
+            api_key=api_key,
+            timeout=timeout,
+            require_json=require_json,
+        )
+        if provider.ping():
+            return provider
         provider.close()
         return DeterministicFallbackProvider()
 

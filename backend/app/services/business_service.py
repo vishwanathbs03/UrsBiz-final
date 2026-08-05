@@ -180,6 +180,16 @@ class BusinessService:
                 business, payload.digital_presence.model_dump()
             )
 
+        # H7.1 — flush pending mutations BEFORE the populate_existing
+        # re-read below. The session runs with ``autoflush=False`` (see
+        # ``app.utils.database.SessionLocal``) and ``get_by_owner`` uses
+        # ``populate_existing=True``. Without an explicit flush the re-read
+        # reloads the STALE committed row over the in-memory changes the
+        # update_* / replace_* methods just staged, so a PUT returned 200
+        # while silently discarding every field. Flushing makes the staged
+        # changes the read-back's source of truth within the transaction.
+        self._repo.flush()
+
         # If everything is filled in, flip is_completed. The service
         # owns this rule; the repository stays dumb.
         fresh = self._repo.get_by_owner(owner_id)

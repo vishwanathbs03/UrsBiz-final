@@ -19,7 +19,7 @@ const features: Feature[] = [
   {
     title: "AI Business Advisor",
     description:
-      "Get daily priority action briefings, plain-language Q&A responses, and zero-hallucination strategic recommendations tailored to your business profile.",
+      "Get daily priority action briefings, plain-language Q&A responses, and strategy suggestions grounded in the deterministic evidence bundle — every recommendation ties back to a business input.",
     icon: Bot,
     badge: "Daily Guidance",
   },
@@ -40,14 +40,14 @@ const features: Feature[] = [
   {
     title: "Smart Analytics",
     description:
-      "Visualize revenue trends, working capital risks, and 3m/6m/12m predictive growth curves with deterministic accuracy.",
+      "Visualize revenue trends, working capital risks, and 3m/6m/12m scenario estimates. Every figure carries a horizon, confidence, and explicit 'no guarantee' disclaimer.",
     icon: LineChart,
     badge: "Predictive",
   },
   {
     title: "Government Scheme Discovery",
     description:
-      "Automatically match 25+ central and state MSME subsidies (PMEGP, CGTMSE, Mudra, ZED) with exact match scores and direct application steps.",
+      "Automatically match official central and state MSME subsidies (PMEGP, CGTMSE, Mudra, ZED and others) with profile-match scores and direct application links.",
     icon: Landmark,
     badge: "Capital Match",
   },

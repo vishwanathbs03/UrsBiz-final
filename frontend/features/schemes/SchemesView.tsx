@@ -8,6 +8,7 @@ import { DashboardCard } from "@/components/dashboard/DashboardCard";
 import { DashboardSkeleton } from "@/components/dashboard/DashboardSkeleton";
 import { EmptyState } from "@/components/common/EmptyState";
 import { ErrorState } from "@/components/common/ErrorState";
+import { TrustEnvelope } from "@/components/common/TrustEnvelope";
 import { Button } from "@/components/ui/button";
 import { schemesService, type SchemeItem } from "@/services/schemes-service";
 import { cn } from "@/lib/utils";
@@ -263,6 +264,42 @@ function SchemeCard({ scheme, onSelect }: { scheme: SchemeItem; onSelect: () => 
             </a>
           </Button>
         )}
+      </div>
+      {/* H7.4 — Docx Prompt 4 Part 2 "Why am I seeing this?" panel.
+          Every scheme card now exposes a compact explanation of
+          inputs, calculation method, why the match matters, what
+          could change the result, and the next action — without
+          requiring the user to open the detail modal. */}
+      <div className="mt-3">
+        <TrustEnvelope
+          envelope={{
+            method: "retrieved",
+            inputs: [
+              { label: "Industry", value: scheme.match_basis || scheme.category },
+              { label: "Match score", value: `${scheme.matching_score}%` },
+              { label: "Band", value: scheme.eligibility_status },
+            ],
+            calculationMethod:
+              "Similarity read between your business profile and the official scheme's known industry / turnover band.",
+            whyItMatters:
+              "A close match suggests the scheme is worth applying for, but the official authority makes the final decision.",
+            whatCouldChange: [
+              "If your industry or turnover band changes, the match score will recompute.",
+              "If the official authority revises the scheme band, the cross-check date below will move.",
+            ],
+            evidence: [
+              scheme.official_authority,
+              scheme.official_source_url,
+              `Last verified: ${scheme.last_verified}`,
+            ],
+            limitations: [
+              "Matching is informational. Final eligibility and approval are determined by the official authority.",
+            ],
+            sourceUpdatedAt: scheme.last_verified,
+            nextAction: "Open the detail modal for the full scheme brief.",
+            onNextAction: onSelect,
+          }}
+        />
       </div>
     </div>
   );

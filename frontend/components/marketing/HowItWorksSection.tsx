@@ -19,7 +19,8 @@ const workflowSteps = [
   {
     step: "02",
     title: "AI Analysis",
-    description: "Sub-50ms evaluation across 8 operational categories.",
+    description:
+      "Deterministic evaluation across the rule engines — typical latency well under a second on dev hardware.",
     icon: Bot,
   },
   {
@@ -37,13 +38,15 @@ const workflowSteps = [
   {
     step: "05",
     title: "Government Schemes",
-    description: "Auto-match 25+ subsidies (PMEGP, CGTMSE, Mudra) with match %.",
+    description:
+      "Profile-match against the official MSME / NSIC / SIDBI / KVIC / MUDRA / Department of Commerce scheme catalog.",
     icon: Landmark,
   },
   {
     step: "06",
     title: "Business Growth",
-    description: "Reinvest capital grants to achieve +24% projected growth.",
+    description:
+      "Track reinvestment with scenario estimates — figures are not predictions and depend on inputs that may change.",
     icon: TrendingUp,
   },
 ];
@@ -54,7 +57,7 @@ export function HowItWorksSection() {
       <div className="container mx-auto px-4">
         <div className="mx-auto max-w-3xl text-center">
           <p className="text-xs font-bold uppercase tracking-widest text-primary">
-            Seamless Autonomous Workflow
+            Seamless Guided Workflow
           </p>
           <h2
             id="how-title"

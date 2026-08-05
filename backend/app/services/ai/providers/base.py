@@ -133,6 +133,64 @@ class AssistantContextInsight:
     confidence: int  # 0..100
 
 
+# --------------------------------------------------------------------------- #
+# H7.3 — Prompt 3 Part 2 evidence bundle extension.
+#
+# The docx evidence bundle adds three sources beyond the original five:
+#   * government SCHEMES         (cite-only, never eligibility)
+#   * FORECAST / SCENARIOS       (scenario estimates, never predictions)
+#   * ACTION BOARD               (existing user-tracked tasks)
+#
+# Each new dataclass is a narrow projection of the upstream service
+# payload. Adding fields here is non-breaking — every downstream caller
+# that does not supply the optional fields sees an empty tuple.
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class AssistantContextScheme:
+    """One government scheme the scheme engine surfaced.
+
+    Mirrors the trust fields of the upstream SchemeItem — official
+    name, authority, application link, profile match. The model
+    receives only the project fields; it cannot promote a profile
+    match to an eligibility claim."""
+
+    scheme_id: str
+    title: str
+    authority: str
+    application_url: str
+    profile_match_score: int  # 0..100
+    last_verified_date: str  # ISO date string
+
+
+@dataclass(frozen=True)
+class AssistantContextForecast:
+    """One forecast / scenario estimate.
+
+    IMPORTANT: per docx P3 Part 6, future-looking results must be
+    labelled 'scenario estimate', not 'prediction'. ``horizon_label``
+    is the human-readable horizon (e.g. "6-month scenario")."""
+
+    scenario_id: str
+    horizon_label: str
+    revenue_delta: float
+    score_delta: int
+    assumption_summary: str
+    confidence: int  # 0..100
+
+
+@dataclass(frozen=True)
+class AssistantContextActionItem:
+    """One item already on the user's action board."""
+
+    action_id: str
+    title: str
+    status: str
+    priority: str
+    due_in_days: int
+
+
 @dataclass(frozen=True)
 class AssistantContext:
     """The slice of business state the provider is allowed to see.
@@ -155,12 +213,20 @@ class AssistantContext:
     roadmap: tuple[AssistantContextRoadmap, ...]
     rules: tuple[AssistantContextRule, ...]
     insights: tuple[AssistantContextInsight, ...]
+    # H7.3 — docx P3 Part 2 evidence-bundle extension.
+    # Optional: callers that don't supply them see empty tuples.
+    schemes: tuple[AssistantContextScheme, ...] = field(default_factory=tuple)
+    forecasts: tuple[AssistantContextForecast, ...] = field(default_factory=tuple)
+    action_items: tuple[AssistantContextActionItem, ...] = field(default_factory=tuple)
     # Sidecar — upstream generated_at fields, echoed.
     twin_generated_at: str | None = None
     recommendations_generated_at: str | None = None
     roadmap_generated_at: str | None = None
     rules_generated_at: str | None = None
     insights_generated_at: str | None = None
+    schemes_generated_at: str | None = None
+    forecasts_generated_at: str | None = None
+    action_items_generated_at: str | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -238,6 +304,13 @@ class AssistantResponse:
     roadmap_generated_at: str | None = None
     rules_generated_at: str | None = None
     insights_generated_at: str | None = None
+    # H7.3 — evidence-bundle extension sidecars. The
+    # deterministic fallback and the openai_compatible
+    # provider stamp these on the response envelope so the
+    # UI can show a "last updated" time per source.
+    schemes_generated_at: str | None = None
+    forecasts_generated_at: str | None = None
+    action_items_generated_at: str | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -349,6 +422,9 @@ class DeterministicFallbackProvider:
             roadmap_generated_at=request.context.roadmap_generated_at,
             rules_generated_at=request.context.rules_generated_at,
             insights_generated_at=request.context.insights_generated_at,
+            schemes_generated_at=request.context.schemes_generated_at,
+            forecasts_generated_at=request.context.forecasts_generated_at,
+            action_items_generated_at=request.context.action_items_generated_at,
         )
 
 

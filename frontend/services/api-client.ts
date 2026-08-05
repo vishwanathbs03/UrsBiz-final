@@ -19,6 +19,38 @@ export class ApiError extends Error {
     this.status = status;
     this.body = body;
   }
+
+  /** Network-level failure — DNS, refused connection, unreachable host.
+   *  Signalled with ``status === 0``. */
+  get isNetworkError(): boolean {
+    return this.status === 0;
+  }
+
+  /** The request exceeded the client-side timeout budget. */
+  get isTimeout(): boolean {
+    const b = this.body as { type?: unknown } | null;
+    return this.status === 0 && b?.type === "AbortError";
+  }
+
+  /** 401 — session missing/invalid/expired. */
+  get isUnauthenticated(): boolean {
+    return this.status === 401;
+  }
+
+  /** 422 — request body failed server-side validation. */
+  get isValidationError(): boolean {
+    return this.status === 422;
+  }
+
+  /** 409 — conflict (duplicate resource, already-exists). */
+  get isConflict(): boolean {
+    return this.status === 409;
+  }
+
+  /** 5xx — the backend itself failed. */
+  get isServerError(): boolean {
+    return this.status >= 500;
+  }
 }
 
 export type RequestOptions = Omit<RequestInit, "body"> & {
@@ -62,8 +94,11 @@ export async function apiRequest<T = unknown>(
   const { body, query, headers, ...rest } = options;
   const url = buildUrl(path, query);
 
-  // TEMP: full request/response trace for the wizard
-  if (path.startsWith("/api/v1/business")) {
+  // Temporary request/response trace for the business wizard. DEV ONLY —
+  // compiled out of production bundles. Never add secrets here.
+  const traceBusReq =
+    process.env.NODE_ENV !== "production" && path.startsWith("/api/v1/business");
+  if (traceBusReq) {
     // eslint-disable-next-line no-console
     console.log("[BUSREQ-REQ]", rest.method ?? "?", url, {
       body,
@@ -141,9 +176,12 @@ export async function apiRequest<T = unknown>(
 
   const parsed = await parseBody(response);
 
-  if (path.startsWith("/api/v1/business")) {
+  if (traceBusReq) {
+    // H7.1 Part 5 — log only the status code, not the response body. The
+    // body is the user's full business profile (employee count, revenue,
+    // products, certifications, etc.) — never log that, even in dev.
     // eslint-disable-next-line no-console
-    console.log("[BUSREQ-RES]", rest.method ?? "?", url, response.status, parsed);
+    console.log("[BUSREQ-RES]", rest.method ?? "?", url, response.status);
   }
 
   if (!response.ok) {

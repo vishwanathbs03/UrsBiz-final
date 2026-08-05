@@ -1,0 +1,193 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 900" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <defs>
+    <style>
+      .title { font-size: 22px; font-weight: 800; fill: #0F172A; }
+      .subtitle { font-size: 13px; fill: #475569; }
+      .layer-title { font-size: 12px; font-weight: 700; fill: #0F172A; letter-spacing: 0.08em; text-transform: uppercase; }
+      .box { fill: #FFFFFF; stroke: #94A3B8; stroke-width: 1.2; }
+      .box-deterministic { fill: #ECFDF5; stroke: #059669; stroke-width: 1.4; }
+      .box-generative { fill: #EFF6FF; stroke: #2563EB; stroke-width: 1.4; stroke-dasharray: 6 4; }
+      .box-storage { fill: #FEF3C7; stroke: #D97706; stroke-width: 1.2; }
+      .box-ext { fill: #F1F5F9; stroke: #64748B; stroke-width: 1.2; stroke-dasharray: 3 3; }
+      .box-trust { fill: #FEE2E2; stroke: #DC2626; stroke-width: 1.4; }
+      .label { font-size: 13px; font-weight: 700; fill: #0F172A; }
+      .sub { font-size: 11px; fill: #475569; }
+      .dashed { stroke: #94A3B8; stroke-width: 1.2; stroke-dasharray: 4 3; fill: none; }
+      .solid { stroke: #475569; stroke-width: 1.4; fill: none; }
+      .arrow-det { stroke: #059669; stroke-width: 1.6; fill: none; marker-end: url(#arrowDet); }
+      .arrow-gen { stroke: #2563EB; stroke-width: 1.6; fill: none; stroke-dasharray: 6 4; marker-end: url(#arrowGen); }
+      .legend-text { font-size: 12px; fill: #0F172A; }
+    </style>
+    <marker id="arrowDet" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#059669"/>
+    </marker>
+    <marker id="arrowGen" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#2563EB"/>
+    </marker>
+  </defs>
+
+  <text x="40" y="40" class="title">UrsBiz — Hackathon Architecture</text>
+  <text x="40" y="62" class="subtitle">Deterministic engines compute every score. Generative synthesis only rephrases the evidence bundle. Storage stays the source of truth.</text>
+
+  <!-- Layer: Client -->
+  <text x="40" y="100" class="layer-title">Client</text>
+  <rect x="40" y="110" width="280" height="90" rx="10" class="box"/>
+  <text x="60" y="138" class="label">Next.js 15 UI</text>
+  <text x="60" y="158" class="sub">• Dashboard, Schemes, Analytics, Advisor, Reports</text>
+  <text x="60" y="174" class="sub">• React Query (TanStack v5) for fetching</text>
+  <text x="60" y="190" class="sub">• Trust labels on every value (rule-engine | scenario | retrieved | generated)</text>
+
+  <!-- Layer: API -->
+  <text x="360" y="100" class="layer-title">API Edge</text>
+  <rect x="360" y="110" width="280" height="90" rx="10" class="box"/>
+  <text x="380" y="138" class="label">FastAPI (Python 3.12)</text>
+  <text x="380" y="158" class="sub">• Pydantic v2 schemas, CORS, security headers</text>
+  <text x="380" y="174" class="sub">• Routes: /api/v1/{auth, business, dashboard, schemes, …}</text>
+  <text x="380" y="190" class="sub">• /health/live and /health/ready for ops</text>
+
+  <!-- Layer: Auth -->
+  <text x="680" y="100" class="layer-title">Identity</text>
+  <rect x="680" y="110" width="240" height="90" rx="10" class="box"/>
+  <text x="700" y="138" class="label">Auth (JWT HS256)</text>
+  <text x="700" y="158" class="sub">• atlas_access_token HTTPOnly cookie</text>
+  <text x="700" y="174" class="sub">• Issued at /login, validated by middleware</text>
+  <text x="700" y="190" class="sub">• No OAuth provider, no AES-256 at rest</text>
+
+  <!-- Layer: Business Digital Twin -->
+  <text x="960" y="100" class="layer-title">Business Digital Twin</text>
+  <rect x="960" y="110" width="280" height="90" rx="10" class="box"/>
+  <text x="980" y="138" class="label">Stored Business Profile</text>
+  <text x="980" y="158" class="sub">• Industry, state, turnover, workforce, machines</text>
+  <text x="980" y="174" class="sub">• Source of truth for every downstream engine</text>
+  <text x="980" y="190" class="sub">• Pydantic-validated on every write</text>
+
+  <!-- ARROWS top row -->
+  <line x1="320" y1="155" x2="358" y2="155" class="solid" marker-end="url(#arrowDet)"/>
+  <line x1="640" y1="155" x2="678" y2="155" class="solid" marker-end="url(#arrowDet)"/>
+  <line x1="920" y1="155" x2="958" y2="155" class="solid" marker-end="url(#arrowDet)"/>
+
+  <!-- Deterministic Engines cluster -->
+  <rect x="35" y="225" width="925" height="225" rx="14" class="box-deterministic"/>
+  <text x="55" y="250" class="label" fill="#065F46">Deterministic Intelligence Engines (rule-based, reproducible)</text>
+  <text x="55" y="268" class="sub" fill="#065F46">Same profile inputs → same outputs every run. No external models.</text>
+
+  <rect x="55" y="285" width="200" height="148" rx="10" class="box-deterministic"/>
+  <text x="70" y="310" class="label">Health Score Engine</text>
+  <text x="70" y="328" class="sub">0–100 across 4 lenses</text>
+  <text x="70" y="344" class="sub">• Financial Stability</text>
+  <text x="70" y="360" class="sub">• Operational Risk</text>
+  <text x="70" y="376" class="sub">• Sales Pipeline</text>
+  <text x="70" y="392" class="sub">• Compliance</text>
+  <text x="70" y="412" class="sub" fill="#065F46">→ rule-engine label</text>
+
+  <rect x="275" y="285" width="200" height="148" rx="10" class="box-deterministic"/>
+  <text x="290" y="310" class="label">Scheme Profile-Match</text>
+  <text x="290" y="328" class="sub">14+ schemes from catalog</text>
+  <text x="290" y="344" class="sub">• Match % per rule</text>
+  <text x="290" y="360" class="sub">• Source + last-verified</text>
+  <text x="290" y="376" class="sub">• Disclaimer per match</text>
+  <text x="290" y="392" class="sub">• MSME / NSIC / TUF / ZED</text>
+  <text x="290" y="412" class="sub" fill="#065F46">→ retrieved label</text>
+
+  <rect x="495" y="285" width="200" height="148" rx="10" class="box-deterministic"/>
+  <text x="510" y="310" class="label">Scenario Estimator</text>
+  <text x="510" y="328" class="sub">Forward-looking 3m / 6m / 12m</text>
+  <text x="510" y="344" class="sub">• Deterministic growth rules</text>
+  <text x="510" y="360" class="sub">• Confidence per horizon</text>
+  <text x="510" y="376" class="sub">• "No guarantee" label</text>
+  <text x="510" y="412" class="sub" fill="#065F46">→ scenario label</text>
+
+  <rect x="715" y="285" width="230" height="148" rx="10" class="box-deterministic"/>
+  <text x="730" y="310" class="label">Report Builder</text>
+  <text x="730" y="328" class="sub">PDF (ReportLab) + CSV</text>
+  <text x="730" y="344" class="sub">• Health snapshot</text>
+  <text x="730" y="360" class="sub">• Scheme recommendations</text>
+  <text x="730" y="376" class="sub">• Scenario horizons</text>
+  <text x="730" y="392" class="sub">• Disclaimer footer</text>
+  <text x="730" y="412" class="sub" fill="#065F46">→ reproducible export</text>
+
+  <!-- Generative Synthesis cluster -->
+  <rect x="35" y="475" width="600" height="170" rx="14" class="box-generative"/>
+  <text x="55" y="500" class="label" fill="#1E3A8A">Grounded Generative Synthesis (optional, off by default)</text>
+  <text x="55" y="518" class="sub" fill="#1E3A8A">LLM only rephrases the deterministic evidence bundle. Values are never invented.</text>
+
+  <rect x="55" y="535" width="270" height="92" rx="10" class="box-generative"/>
+  <text x="70" y="560" class="label">Evidence Bundler</text>
+  <text x="70" y="578" class="sub">• Assembles {scores, schemes, horizon}</text>
+  <text x="70" y="594" class="sub">• Passes context to provider</text>
+  <text x="70" y="610" class="sub">• Annotates with trust labels</text>
+
+  <rect x="345" y="535" width="270" height="92" rx="10" class="box-generative"/>
+  <text x="360" y="560" class="label">OpenAI-Compatible Provider</text>
+  <text x="360" y="578" class="sub">• Optional; safe placeholder fallback</text>
+  <text x="360" y="594" class="sub">• No embeddings, no vector store</text>
+  <text x="360" y="610" class="sub">• → generated label</text>
+
+  <!-- Trust + Storage right column -->
+  <rect x="660" y="475" width="300" height="170" rx="14" class="box-trust"/>
+  <text x="680" y="500" class="label" fill="#7F1D1D">Trust Boundary</text>
+  <text x="680" y="518" class="sub" fill="#7F1D1D">Forbidden language: "You are eligible", "Approved", "Guaranteed", "You will receive funding". Use "Profile match".</text>
+  <text x="680" y="544" class="sub">• Every score → rule citation</text>
+  <text x="680" y="560" class="sub">• Every scheme → source link + last-verified</text>
+  <text x="680" y="576" class="sub">• Every horizon → confidence + "no guarantee"</text>
+  <text x="680" y="592" class="sub">• Every generated sentence → grounded in evidence</text>
+  <text x="680" y="608" class="sub">• Health endpoints verify /ready before serving</text>
+
+  <!-- Storage -->
+  <rect x="985" y="225" width="255" height="225" rx="14" class="box-storage"/>
+  <text x="1000" y="250" class="label">PostgreSQL / SQLite</text>
+  <text x="1000" y="268" class="sub">• users, business_profiles, scenarios, notifications</text>
+  <text x="1000" y="284" class="sub">• scheme_match_runs (audit trail)</text>
+  <text x="1000" y="300" class="sub">• SQLAlchemy 2 + Alembic migrations</text>
+  <text x="1000" y="328" class="label">Government Scheme Catalog</text>
+  <text x="1000" y="346" class="sub">• Versioned YAML/JSON on disk</text>
+  <text x="1000" y="362" class="sub">• 14+ entries (MSME / NSIC / TUF / ZED)</text>
+  <text x="1000" y="378" class="sub">• Cited authority + last-verified date</text>
+  <text x="1000" y="394" class="sub">• Loaded into a knowledge base at startup</text>
+
+  <!-- External LLM -->
+  <rect x="985" y="475" width="255" height="92" rx="10" class="box-ext"/>
+  <text x="1000" y="500" class="label">External LLM (optional)</text>
+  <text x="1000" y="518" class="sub">• OpenAI-compatible endpoint</text>
+  <text x="1000" y="534" class="sub">• Only called when AI_PROVIDER is set</text>
+  <text x="1000" y="550" class="sub">• Falls back to safe placeholder</text>
+
+  <!-- ARROWS scene: Business Twin → engines, engines → storage, generative ↔ storage -->
+  <line x1="1100" y1="200" x2="1100" y2="225" class="solid" marker-end="url(#arrowDet)"/>
+  <line x1="1100" y1="450" x2="1100" y2="475" class="solid" marker-end="url(#arrowDet)"/>
+
+  <line x1="345" y1="359" x2="985" y2="359" class="solid" marker-end="url(#arrowDet)"/>
+  <line x1="155" y1="433" x2="155" y2="475" class="solid" marker-end="url(#arrowDet)"/>
+  <line x1="480" y1="627" x2="985" y2="535" class="arrow-gen" marker-end="url(#arrowGen)"/>
+
+  <line x1="1112" y1="567" x2="615" y2="627" class="arrow-gen" marker-end="url(#arrowGen)"/>
+
+  <!-- Customer-facing output -->
+  <rect x="660" y="675" width="580" height="120" rx="14" class="box"/>
+  <text x="680" y="700" class="label">Customer-facing Outputs</text>
+  <text x="680" y="720" class="sub">Dashboards, scheme cards, scenario charts, advisor replies, exported PDF/CSV — each labeled with its source.</text>
+  <text x="680" y="738" class="sub">Audit trail: scheme_match_runs + report rows reproduce every figure from the stored profile.</text>
+  <text x="680" y="756" class="sub">Reproduction: the demo workspace (Acme Textiles, Tirupur) always produces the same numbers.</text>
+  <text x="680" y="774" class="sub">Run locally: see README → "Local Setup" and "Verification".</text>
+
+  <!-- Ops -->
+  <rect x="35" y="675" width="580" height="120" rx="14" class="box"/>
+  <text x="55" y="700" class="layer-title">Operations</text>
+  <text x="55" y="722" class="sub">• Docker Compose: nginx + backend + frontend + prometheus + grafana</text>
+  <text x="55" y="738" class="sub">• Health: /api/v1/health/live (process) and /api/v1/health/ready (DB + knowledge + AI + migrations)</text>
+  <text x="55" y="754" class="sub">• Versioned migration: 20260101_0005</text>
+  <text x="55" y="770" class="sub">• Native run: uvicorn :8001 + next dev :3000</text>
+  <text x="55" y="786" class="sub">• See docs/DEPLOYMENT_HACKATHON.md for the minimum-risk deployment guide.</text>
+
+  <!-- Legend -->
+  <rect x="35" y="820" width="1205" height="60" rx="10" class="box"/>
+  <line x1="55" y1="850" x2="105" y2="850" class="arrow-det" marker-end="url(#arrowDet)"/>
+  <text x="115" y="854" class="legend-text">Deterministic data flow (rule engine → UI / storage)</text>
+  <line x1="430" y1="850" x2="480" y2="850" class="arrow-gen" marker-end="url(#arrowGen)"/>
+  <text x="490" y="854" class="legend-text">Grounded generative flow (LLM only rephrases the evidence bundle; values are labeled)</text>
+  <rect x="900" y="838" width="22" height="20" class="box-deterministic"/>
+  <text x="930" y="854" class="legend-text">Deterministic engines</text>
+  <rect x="1100" y="838" width="22" height="20" class="box-generative"/>
+  <text x="1130" y="854" class="legend-text">Generative synthesis</text>
+</svg>

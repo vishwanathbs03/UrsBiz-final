@@ -199,6 +199,16 @@ class BusinessRepository:
         business.is_completed = completed
         return business
 
+    def flush(self) -> None:
+        """Flush pending changes to the transaction without committing.
+
+        H7.1 — the session runs ``autoflush=False``; the update path
+        re-reads the row with ``populate_existing`` before commit, which
+        would otherwise reload stale committed state over staged edits.
+        Flushing first makes the staged changes the source of truth.
+        """
+        self._db.flush()
+
     # ---- Delete --------------------------------------------------------
 
     def delete(self, business: Business) -> None:

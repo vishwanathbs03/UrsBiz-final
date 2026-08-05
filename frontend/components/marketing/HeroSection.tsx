@@ -101,8 +101,8 @@ export function HeroSection() {
                 <CheckCircle2 className="size-3.5 text-emerald-500" /> Free Tier Available
               </span>
               <span>•</span>
-              <span className="flex items-center gap-1">
-                <CheckCircle2 className="size-3.5 text-emerald-500" /> Sub-50ms AI Engine
+              <span className="flex items-center gap-1" title="Deterministic rule engines run locally — see docs/DEPLOYMENT_HACKATHON.md for measured timings in our smoke test (15–90 ms typical, ~900 ms for the heaviest twin aggregate on dev hardware).">
+                <CheckCircle2 className="size-3.5 text-emerald-500" /> Fast Deterministic Engine
               </span>
               <span>•</span>
               <span className="flex items-center gap-1">

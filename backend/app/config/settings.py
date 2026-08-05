@@ -65,25 +65,41 @@ class Settings(BaseSettings):
     )
     database_echo: bool = False
 
-    # AI provider layer (Sprint 7 Part 2).
+    # AI provider layer (Sprint 7 Part 2 + H7.3).
     # AI_PROVIDER selects the provider to use at runtime:
-    #   "ollama"     - real Ollama HTTP provider (requires OLLAMA_BASE_URL
-    #                  reachable); falls back to deterministic locally when
-    #                  the upstream is unreachable
+    #   "ollama"               - real Ollama HTTP provider (requires OLLAMA_BASE_URL
+    #                            reachable); falls back to deterministic locally
+    #                            when the upstream is unreachable
+    #   "openai_compatible"    - any OpenAI-compatible chat-completions endpoint
+    #                            (OpenRouter, Together, Groq, vLLM, etc.) using
+    #                            the generic /v1/chat/completions contract.
     #   "placeholder" / "disabled" / any other value
-    #                - no real provider; the layer still works because the
-    #                  factory returns the deterministic fallback
+    #                          - no real provider; the layer still works because
+    #                            the factory returns the deterministic fallback
     ai_provider: str = "placeholder"
     ai_api_key: str = ""
 
     # Ollama-specific. Both default to the Ollama-documented values.
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.1"
+
+    # OpenAI-compatible provider (H7.3). Honours the docx Prompt 3 Part 1
+    # settings contract: AI_BASE_URL, AI_API_KEY, AI_MODEL,
+    # AI_REQUEST_TIMEOUT_SECONDS. Do NOT log or commit AI_API_KEY.
+    ai_base_url: str = ""
+    ai_model: str = ""
     # Per-request timeout, seconds. Ollama cold-start on a small CPU box
     # can easily exceed 30s for the first call; 60s is a pragmatic
     # compromise between "give the model room" and "do not block the API
     # forever". Override per environment if you have a GPU.
     ai_request_timeout_seconds: float = 60.0
+
+    # H7.3 — toggle the structured response schema validation. The
+    # openai_compatible provider is allowed to return plain text (legacy),
+    # but when this flag is true the provider requests JSON and the
+    # response parser validates against the docx P3 schema, falling
+    # back to the deterministic provider on validation failure.
+    ai_require_schema: bool = True
 
     # Authentication (Sprint 1 Part 3)
     jwt_secret_key: str = "change-me"
