@@ -14,6 +14,7 @@ import {
 import { cn } from "@/lib/utils";
 import type { ChatMessage as ChatMessageModel } from "./types";
 import { ConsultantRenderer } from "./ConsultantRenderer";
+import { GroundedResponseRenderer } from "./GroundedResponseRenderer";
 import { formatAssistantBody } from "./AssistantRenderer";
 import { TrustBadge, TrustMeta, type TrustLabel } from "./TrustBadge";
 
@@ -49,14 +50,47 @@ export function MessageBubble({
   const [copied, setCopied] = useState(false);
   const [vote, setVote] = useState<"up" | "down" | null>(null);
   const isStructured = !isUser && !!message.consultant;
+  // H7.8C P3 — the server-validated GroundedResponse takes
+  // precedence over the legacy ``consultant`` payload when
+  // both are present. The GroundingValidator has already
+  // checked every claim; we just render the nine sections.
+  const groundedPayload = !isUser ? message.generation?.grounded_payload : null;
+  const isGrounded = !!groundedPayload;
 
   const handleCopy = () => {
     if (typeof navigator !== "undefined" && navigator.clipboard) {
-      const text = message.consultant
-        ? message.consultant.sections
-            .map((s) => `${s.title}\n${s.body ?? ""}`)
-            .join("\n\n")
-        : message.content;
+      let text = message.content;
+      if (groundedPayload) {
+        // H7.8C — the GroundedResponseRenderer renders nine
+        // sections. The clipboard copy should match what the
+        // user sees: executive summary + each section's
+        // textual content. A future iteration can produce a
+        // markdown variant.
+        const parts: string[] = [groundedPayload.executive_summary];
+        for (const f of groundedPayload.key_findings) {
+          parts.push(`- ${f.title}${f.detail ? ` — ${f.detail}` : ""}`);
+        }
+        for (const r of groundedPayload.recommendations) {
+          parts.push(`- ${r.title} (${r.recommendation_id})`);
+        }
+        for (const p of groundedPayload.thirty_day_plan) {
+          parts.push(`- Week ${p.week}: ${p.task}`);
+        }
+        for (const s of groundedPayload.scheme_matches) {
+          parts.push(`- Scheme profile match: ${s.match_explanation}`);
+        }
+        for (const a of groundedPayload.assumptions) {
+          parts.push(`Assumption: ${a}`);
+        }
+        for (const l of groundedPayload.limitations) {
+          parts.push(`Limitation: ${l}`);
+        }
+        text = parts.join("\n");
+      } else if (message.consultant) {
+        text = message.consultant.sections
+          .map((s) => `${s.title}\n${s.body ?? ""}`)
+          .join("\n\n");
+      }
       void navigator.clipboard.writeText(text);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
@@ -88,7 +122,25 @@ export function MessageBubble({
           isUser ? "items-end" : "items-start",
         )}
       >
-        {isStructured ? (
+        {isGrounded ? (
+          <div
+            data-testid="grounded-message-bubble"
+            className={cn(
+              "relative group w-full rounded-2xl border border-border bg-card text-card-foreground shadow-soft transition-shadow",
+              "hover:shadow-md",
+            )}
+          >
+            <div className="space-y-3 p-3 sm:p-4">
+              <GroundedResponseRenderer response={groundedPayload!} />
+            </div>
+            <ActionToolbar
+              copied={copied}
+              onCopy={handleCopy}
+              vote={vote}
+              onVote={setVote}
+            />
+          </div>
+        ) : isStructured ? (
           <div
             className={cn(
               "relative group w-full rounded-2xl border border-border bg-card text-card-foreground shadow-soft transition-shadow",
@@ -169,6 +221,7 @@ export function MessageBubble({
             groundingScore={message.generation.server_grounding_score}
             promptTruncated={message.generation.prompt_truncated}
             providerLatencyMs={message.generation.provider_latency_ms ?? undefined}
+            contextManifest={message.generation.context_manifest}
             className="self-start"
           />
         )}
@@ -468,16 +521,19 @@ function TypedBody({ text }: { text: string }) {
 export function deriveTrustLabel(message: ChatMessageModel): TrustLabel {
   const gen = message.generation;
   if (gen) {
+    if (gen.generation_method === "offline_snapshot" || gen.fallback_reason === "offline_snapshot") {
+      return "offline_snapshot";
+    }
     if (gen.fallback_used) return "rule_engine";
-    if (gen.mode === "open") return "open_domain";
+    if (gen.mode === "open") {
+      if (gen.context_manifest && gen.context_manifest.records_used > 0) {
+        return "open_business";
+      }
+      return "open_domain";
+    }
     if (gen.grounding_validated) return "generated";
-    // Fall through: a real provider answered but grounding
-    // didn't validate. Still a generative answer — the user
-    // gets the "generated" badge with a low trust score. We
-    // prefer showing the actual provider over hiding it.
     return "generated";
   }
-  // Legacy path: client-side deterministic consultant.
   return message.fallback_used === false ? "generated" : "rule_engine";
 }
 

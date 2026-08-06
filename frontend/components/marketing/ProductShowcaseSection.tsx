@@ -5,15 +5,15 @@ import { Button } from "@/components/ui/button";
 const showcases = [
   {
     id: "dashboard",
-    title: "Executive Dashboard & Business Health Score",
-    subtitle: "Real-time visibility into your 8-category health index.",
+    title: "Executive Dashboard & Profile Readiness Score",
+    subtitle: "Real-time visibility into your 0–100 profile-completeness index.",
     description:
-      "Monitor your Business Health Score out of 100 with category breakdowns across Financial Stability, Operational Risk, Sales Pipeline, and Compliance. Always know where your business stands.",
+      "Monitor your Profile Readiness Score out of 100. It measures how completely your digital twin is filled in across six weighted sections (profile completeness, business info, products/services, team, financial, online presence). It is not a measure of business risk — a fully-populated profile does not mean the business is risk-free.",
     icon: ShieldCheck,
     href: "/dashboard",
     stats: [
-      { label: "Health Index", val: "78 / 100" },
-      { label: "Status", val: "Strong Growth" },
+      { label: "Score", val: "0–100 (deterministic)" },
+      { label: "Measures", val: "Profile completeness" },
     ],
   },
   {

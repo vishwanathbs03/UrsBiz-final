@@ -3,8 +3,8 @@ import { ShieldCheck, FileText, BarChart3, ListChecks } from "lucide-react";
 const signals = [
   {
     icon: BarChart3,
-    title: "Deterministic Health Score",
-    body: "Computed every time from your business profile — the same inputs always produce the same 0–100 score across the four lenses (financial, operational, sales, compliance).",
+    title: "Deterministic Profile Readiness Score",
+    body: "Computed every time from your business profile — the same inputs always produce the same 0–100 score. It measures how completely the digital twin is populated (six weighted sections), not business risk.",
   },
   {
     icon: ListChecks,

@@ -1,0 +1,8 @@
+[tool.pytest.ini_options]
+# Restrict pytest test discovery to the actual repository test suite.
+# Debug scripts (e.g. scripts/debug/test_backend_ai.py) live outside
+# this path and must NOT participate in repository verification.
+testpaths = ["backend/tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]

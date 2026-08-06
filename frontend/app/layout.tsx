@@ -13,7 +13,7 @@ export const metadata: Metadata = {
   manifest: "/manifest.json",
   openGraph: {
     title: "UrsBiz — AI-Powered Business Intelligence Platform",
-    description: "Enterprise Digital Twin, Business Health Scoring, AI Advisor & Analytics Platform.",
+    description: "Enterprise Digital Twin, Profile Readiness Score, AI Advisor & Analytics Platform.",
     url: env.appUrl,
     siteName: "UrsBiz",
     type: "website",

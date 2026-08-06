@@ -22,7 +22,7 @@ import { useEffect, useState } from "react";
 import { Building2, CircleAlert, CircleCheck, RefreshCcw, Sparkles, Trash2 } from "lucide-react";
 import { DashboardCard } from "@/components/dashboard/DashboardCard";
 import { Button } from "@/components/ui/button";
-import { chatService, type ChatProviderStatus } from "@/services/chat-service";
+import { ApiError, chatService, type ChatProviderStatus } from "@/services/chat-service";
 import { cn } from "@/lib/utils";
 
 interface AssistantHeaderProps {
@@ -33,6 +33,58 @@ interface AssistantHeaderProps {
   messageCount: number;
   /** Optional right-aligned controls (e.g. server-history toggle). */
   rightSlot?: React.ReactNode;
+}
+
+/**
+ * H7.8C — provider-status fetch state machine. The pill
+ * surfaces one of four mutually-exclusive states:
+ *
+ *   loading    — request is in flight or not yet completed
+ *   available  — backend returned 200, ``available=true``,
+ *                ``fallback_active=false`` → the configured
+ *                provider is reachable
+ *   fallback   — backend returned 200, ``fallback_active=true``
+ *                or ``available=false`` → the deterministic
+ *                UrsBiz fallback is currently in use
+ *   auth       — backend returned 401 → the user is genuinely
+ *                unauthenticated; the Assistant page should
+ *                already have been guarded by the auth
+ *                middleware, so this state is mostly defensive
+ *   error      — any other failure (network, 5xx) → render a
+ *                neutral "unavailable" message and never echo
+ *                the raw backend payload
+ *
+ * Raw backend JSON is NEVER rendered. Only the canonical
+ * provider name and model identifier are surfaced.
+ */
+type ProviderState =
+  | { kind: "loading" }
+  | { kind: "available"; provider: string; model: string }
+  | { kind: "fallback" }
+  | { kind: "auth" }
+  | { kind: "error" };
+
+function toProviderState(
+  status: ChatProviderStatus | null,
+  loadError: unknown | null,
+): ProviderState {
+  if (status) {
+    if (status.available && !status.fallback_active) {
+      return {
+        kind: "available",
+        provider: status.configured_provider,
+        model: status.model,
+      };
+    }
+    return { kind: "fallback" };
+  }
+  if (loadError) {
+    if (loadError instanceof ApiError && loadError.isUnauthenticated) {
+      return { kind: "auth" };
+    }
+    return { kind: "error" };
+  }
+  return { kind: "loading" };
 }
 
 export function AssistantHeader({
@@ -46,15 +98,22 @@ export function AssistantHeader({
   const [providerStatus, setProviderStatus] = useState<ChatProviderStatus | null>(
     null,
   );
+  const [providerError, setProviderError] = useState<unknown | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       try {
         const s = await chatService.fetchProviderStatus();
-        if (!cancelled) setProviderStatus(s);
-      } catch {
-        if (!cancelled) setProviderStatus(null);
+        if (!cancelled) {
+          setProviderStatus(s);
+          setProviderError(null);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setProviderStatus(null);
+          setProviderError(err);
+        }
       }
     };
     void load();
@@ -63,13 +122,15 @@ export function AssistantHeader({
     };
   }, []);
 
+  const providerState = toProviderState(providerStatus, providerError);
+
   return (
     <DashboardCard
       badge="AI Assistant"
       title="AI Business Assistant"
       caption={
-        providerStatus
-          ? `Hybrid AI · ${providerStatus.configured_provider} (${providerStatus.model}) — grounded mode is the default.`
+        providerState.kind === "available"
+          ? `Hybrid AI · ${providerState.provider} (${providerState.model}) — grounded mode is the default.`
           : "Ask anything about your business. Responses are grounded in the Digital Twin, Recommendations, Roadmap, Insights, and Rules."
       }
       trailing={
@@ -109,7 +170,7 @@ export function AssistantHeader({
       }
     >
       <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-        <ProviderStatusPill status={providerStatus} />
+        <ProviderStatusPill state={providerState} />
         <span className="inline-flex items-center gap-1.5">
           <Building2 className="size-3.5 text-primary" aria-hidden="true" />
           Last analysis
@@ -128,46 +189,69 @@ export function AssistantHeader({
 }
 
 /**
- * Provider status pill — green when the configured provider
- * is reachable, red when the deterministic fallback is
- * active. Renders the provider *name* and model identifier
- * only; never the base URL, API key, or auth header.
+ * Provider status pill — renders one of the four canonical
+ * states defined by ``ProviderState``. Never echoes raw backend
+ * JSON, never displays the API key, base URL, or upstream
+ * authorization header.
  */
-function ProviderStatusPill({
-  status,
-}: {
-  status: ChatProviderStatus | null;
-}) {
-  if (!status) {
-    return (
-      <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-        <Sparkles className="size-3.5 text-primary" aria-hidden="true" />
-        Provider status…
-      </span>
-    );
+function ProviderStatusPill({ state }: { state: ProviderState }) {
+  switch (state.kind) {
+    case "loading":
+      return (
+        <span
+          className="inline-flex items-center gap-1.5 text-muted-foreground"
+          data-testid="provider-status-pill"
+          data-state="loading"
+        >
+          <Sparkles className="size-3.5 text-primary animate-pulse" aria-hidden="true" />
+          Checking provider…
+        </span>
+      );
+    case "available":
+      return (
+        <span
+          className="inline-flex items-center gap-1.5 text-emerald-700"
+          data-testid="provider-status-pill"
+          data-state="available"
+        >
+          <CircleCheck className="size-3.5" aria-hidden="true" />
+          {state.provider} connected ({state.model})
+        </span>
+      );
+    case "fallback":
+      return (
+        <span
+          className="inline-flex items-center gap-1.5 text-amber-700"
+          data-testid="provider-status-pill"
+          data-state="fallback"
+        >
+          <CircleAlert className="size-3.5" aria-hidden="true" />
+          Using UrsBiz verified intelligence — fallback active
+        </span>
+      );
+    case "auth":
+      return (
+        <span
+          className="inline-flex items-center gap-1.5 text-muted-foreground"
+          data-testid="provider-status-pill"
+          data-state="auth"
+        >
+          <CircleAlert className="size-3.5" aria-hidden="true" />
+          Sign in to use AI Assistant
+        </span>
+      );
+    case "error":
+      return (
+        <span
+          className="inline-flex items-center gap-1.5 text-muted-foreground"
+          data-testid="provider-status-pill"
+          data-state="error"
+        >
+          <CircleAlert className="size-3.5" aria-hidden="true" />
+          AI provider unavailable — UrsBiz fallback ready
+        </span>
+      );
   }
-  if (status.available && !status.fallback_active) {
-    return (
-      <span
-        className="inline-flex items-center gap-1.5 text-emerald-700"
-        data-testid="provider-status-pill"
-        data-state="available"
-      >
-        <CircleCheck className="size-3.5" aria-hidden="true" />
-        {status.configured_provider} ({status.model}) connected
-      </span>
-    );
-  }
-  return (
-    <span
-      className="inline-flex items-center gap-1.5 text-amber-700"
-      data-testid="provider-status-pill"
-      data-state="fallback"
-    >
-      <CircleAlert className="size-3.5" aria-hidden="true" />
-      Provider unavailable — using rule engine
-    </span>
-  );
 }
 
 function formatTimestamp(iso: string): string {

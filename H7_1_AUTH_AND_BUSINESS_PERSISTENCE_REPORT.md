@@ -166,11 +166,18 @@ installed is available — either locally or in CI. The expected outcome is
 
 > *"PASS only when the full journey works twice in a clean browser session."*
 
-**Status: NOT EXECUTABLE in this agent environment.** The agent harness has no
-browser automation and the deployment is not yet public (P6 is the next sprint).
+**Status update (H7.8B — 2026-08-05):** **EXECUTED and PASS.** The full
+journey was walked twice in a real Chromium via the Playwright
+`hackathon-critical-flow.spec.ts` spec. The journey hits every acceptance
+criterion from §3 (register → create business → save → refresh → business
+still present → logout → re-login → business still present → dashboard
+loads). The two related product bugs found during the retest (login form
+label association, `/intelligence` crash on missing fields) were fixed in
+H7.8B and verified. See `H7_8B_REAL_BROWSER_CLOSURE_REPORT.md` and
+`docs/submission/e2e-summary/README.md` for the honest record.
 
-The exact manual steps that must be run to close this gate are documented in
-**§9 — Manual Owner-Action Checklist** below.
+The exact manual steps below remain the right recipe for any future
+re-run.
 
 ---
 
@@ -273,6 +280,40 @@ business profile visible to the related P2 deliverable. **P1 is closed.**
 Once both blockers are closed, P1 will be **PASS** and the subsequent prompts
 (P2 through P9) can proceed against a stable, regression-tested authentication
 and business-save path.
+
+---
+
+## 12. Closure Update (H7.8B — 2026-08-05)
+
+Both blockers above are now closed by H7.8B P2–P4 (see
+`H7_8B_REAL_BROWSER_CLOSURE_REPORT.md`). The verdict therefore moves from
+**CONDITIONAL** to **PASS**, with the following evidence:
+
+- **Regression test executed.** `backend/tests/test_h7_1_business_persistence.py`
+  was run end-to-end against the locally-running stack. Both
+  `test_business_update_persists` and `test_update_then_relogin_persists`
+  PASS. Logout → re-login → business still present is verified by the
+  second test, which mirrors the docx browser-refresh + re-auth path.
+- **Clean-browser retest executed.** A real Chromium (Playwright) walked
+  the H7.1 journey twice (`landing → register/login → create business →
+  save → refresh → still present → logout → login → still present`).
+  The journey is encoded in
+  `frontend/e2e/hackathon-critical-flow.spec.ts`; the screenshots from the
+  second pass are at `docs/submission/screenshots/03-dashboard-desktop.png`
+  (Acme Textiles profile visible) and `04-business-desktop.png` (full
+  business profile saved).
+- **Two related product bugs found and fixed during the retest** (both
+  product, both now PASS):
+  - Login form inputs had no `<label htmlFor>` association because `Input`
+    did not read `FormField` context. Fixed in
+    `frontend/components/ui/input.tsx` — see H7.8B §3.1.
+  - `/intelligence` page crashed when recommendation records omitted
+    `phase` / `estimated_timeline`. Fixed defensively in
+    `frontend/features/intelligence/twin-sections/TopNextActions.tsx` —
+    see H7.8B §3.2.
+
+**Final verdict:** **PASS**. P1 is closed and the persistence path is
+regression-tested and visually verified end-to-end in a real browser.
 
 ---
 

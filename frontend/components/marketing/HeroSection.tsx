@@ -55,7 +55,7 @@ export function HeroSection() {
             <div className="mt-6 flex flex-wrap gap-2">
               {[
                 { label: "AI Business Advisor", icon: Bot },
-                { label: "Business Health Score", icon: TrendingUp },
+                { label: "Profile Readiness Score", icon: TrendingUp },
                 { label: "Business Digital Twin", icon: Building2 },
                 { label: "Government Schemes", icon: Landmark },
                 { label: "Executive Reports", icon: FileText },
@@ -130,7 +130,7 @@ export function HeroSection() {
                 <div className="rounded-xl border border-primary/20 bg-primary/5 p-4">
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="text-xs uppercase tracking-wider font-semibold text-muted-foreground">Business Health Score</p>
+                      <p className="text-xs uppercase tracking-wider font-semibold text-muted-foreground">Profile Readiness Score</p>
                       <h3 className="text-2xl font-extrabold text-foreground mt-0.5">78 <span className="text-sm font-normal text-muted-foreground">/ 100</span></h3>
                     </div>
                     <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 text-xs font-bold text-emerald-500">

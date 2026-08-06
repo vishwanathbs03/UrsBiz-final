@@ -4,6 +4,8 @@
 > Delivered on `release/hackathon-clean`
 > @ `ef2890c3132f831ddcd95c1e11faab8b47124945` on 2026-08-05.
 
+> **H7.8A correction note (2026-08-05):** The "14+ schemes" surviving-claim (row B, §4) and §3 row 7 ("the live demo produces **14+** matches") are **incorrect**. The authoritative source — `backend/app/services/schemes_sprint16_service.py` `SCHEMES_CATALOG` — contains exactly **7 entries** (CGTMSE, ZED, PMEGP, MAI, MUDRA Shishu, NSIC, Udyam). The H7.7 audit conflated the 7-entry scheme catalog with the 14-article `knowledge_catalog.json` (assistant knowledge base, unrelated). All 14+ claims in this report are superseded by the H7.8A truth-repair pass.
+
 ---
 
 ## 1. What this prompt asked for

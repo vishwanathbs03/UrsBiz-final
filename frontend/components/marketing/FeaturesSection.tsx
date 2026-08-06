@@ -31,9 +31,9 @@ const features: Feature[] = [
     badge: "Core Profile",
   },
   {
-    title: "Health Score Engine",
+    title: "Profile Readiness Engine",
     description:
-      "Instantly calculate a 0-100 Business Health Score evaluating financial stability, compliance, sales, operations, and governance.",
+      "Instantly compute a 0-100 Profile Readiness Score measuring how completely the founder has filled in their business profile across six weighted sections. Same inputs always produce the same score.",
     icon: ShieldCheck,
     badge: "0-100 Index",
   },

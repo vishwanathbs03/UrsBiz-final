@@ -313,14 +313,25 @@ def _to_messages(
     H7.8C — the system prompt is mode-aware (``grounded`` vs
     ``open``). The provider passes ``request.mode`` here so the
     right contract is selected.
+
+    H7.8C — the user message is rendered via the prompt builder so
+    the model actually receives the structured snapshot + evidence
+    registry + untrusted-delimiter block. Sending the bare
+    ``clipped_prompt`` (as this provider used to) drops the entire
+    business context and the model responds with "no profile
+    available" — that's a regression that this fix closes.
     """
+    _ = clipped_prompt  # kept for API symmetry; the renderer reads request.user_prompt directly
     out: list[dict[str, str]] = [
         {"role": "system", "content": AssistantPromptBuilder.system_message(mode)},
     ]
     for turn in request.history:
         role = turn.role if turn.role in ("user", "assistant") else "user"
         out.append({"role": role, "content": turn.content})
-    out.append({"role": "user", "content": clipped_prompt})
+    out.append({
+        "role": "user",
+        "content": AssistantPromptBuilder.render_user_message(request),
+    })
     return out
 
 

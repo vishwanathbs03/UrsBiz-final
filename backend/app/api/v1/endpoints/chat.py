@@ -135,12 +135,27 @@ def _service(db: Annotated[Session, Depends(get_db)]) -> ConversationService:
             # not crash.
             return {"generated_at": None, "decision": {"insights": []}}
 
+    def profile_provider(owner_id: int):
+        # H7.8C — surface the owner's annual_revenue so the
+        # evidence registry can anchor the user's prompt
+        # revenue figure (e.g. "₹1.8 Cr to ₹3 Cr"). Returned
+        # shape matches ``_annual_revenue_inr``'s contract:
+        # ``{"annual_revenue": float, "revenue_currency": str}``.
+        business = repo.get_by_owner(owner_id)
+        if business is None:
+            return {}
+        return {
+            "annual_revenue": float(business.annual_revenue or 0),
+            "revenue_currency": str(business.revenue_currency or "USD"),
+        }
+
     context_builder = AssistantContextBuilder(
         twin_provider=twin_provider,
         recommendations_provider=recommendations_provider,
         roadmap_provider=roadmap_provider,
         rules_provider=rules_provider,
         insights_provider=insights_provider,
+        profile_provider=profile_provider,
     )
 
     settings = get_settings()
@@ -156,10 +171,18 @@ def _service(db: Annotated[Session, Depends(get_db)]) -> ConversationService:
         if hasattr(settings, "knowledge_retrieval_top_k")
         else 3,
     )
+    # H7.8C — rolling context window size is now configurable via
+    # ``Settings.ai_max_history_turns``. The default in the service
+    # matches the Settings default (8) so existing callers are
+    # unaffected.
+    rolling_turns = int(
+        getattr(settings, "ai_max_history_turns", 8)
+    )
     return ConversationService(
         ChatSessionRepository(db),
         assistant_service=assistant_service,
         knowledge_retriever=knowledge_retriever,
+        rolling_context_turns=rolling_turns,
     )
 
 
@@ -195,12 +218,26 @@ def _provider_status_service(
         except BusinessNotFound:
             return {"generated_at": None, "decision": {"insights": []}}
 
+    def profile_provider(owner_id: int):
+        # H7.8C — match the main service's profile_provider
+        # contract even though the status probe never reads
+        # context. Keeps the wiring symmetric so a future
+        # test or extension can rely on it.
+        business = repo.get_by_owner(owner_id)
+        if business is None:
+            return {}
+        return {
+            "annual_revenue": float(business.annual_revenue or 0),
+            "revenue_currency": str(business.revenue_currency or "USD"),
+        }
+
     context_builder = AssistantContextBuilder(
         twin_provider=twin_provider,
         recommendations_provider=recommendations_provider,
         roadmap_provider=roadmap_provider,
         rules_provider=rules_provider,
         insights_provider=insights_provider,
+        profile_provider=profile_provider,
     )
     settings = get_settings()
     factory = ProviderFactory(settings)
@@ -251,6 +288,37 @@ def create_conversation(
         title=payload.title,
     )
     return ChatSessionDetail.model_validate(detail)
+
+
+@router.get(
+    "/provider-status",
+    response_model=ChatProviderStatusResponse,
+    summary="Return the active AI provider's reachability + mode list.",
+)
+def provider_status(
+    current_user: Annotated[User, Depends(get_current_user)],
+    assistant_service: Annotated[
+        AssistantProviderService, Depends(_provider_status_service)
+    ],
+) -> ChatProviderStatusResponse:
+    """Surface provider name, model, and availability for the chat header.
+
+    H7.8C — the response never includes the API key, the
+    Authorization header, or the upstream base URL. The frontend
+    uses the data to render the "Ollama connected" / "Provider
+    unavailable" dot + the mode toggle.
+
+    NOTE — route ordering. This route MUST be declared BEFORE
+    ``GET /{session_id}`` because FastAPI matches routes in
+    declaration order. Otherwise ``/provider-status`` would be
+    captured by the ``/{session_id}`` path and rejected with a
+    422 (``session_id`` is declared as ``Path(ge=1)`` int, which
+    cannot parse the literal string "provider-status"). This was
+    the H7.8C regression — the Assistant header always rendered
+    "Provider status…" because the request never returned 200.
+    """
+    status_payload = assistant_service.provider_status()
+    return ChatProviderStatusResponse.model_validate(status_payload)
 
 
 @router.get(
@@ -328,25 +396,3 @@ def append_message(
         "assistant_message": result.assistant_message,
         "session": result.session,
     })
-
-
-@router.get(
-    "/provider-status",
-    response_model=ChatProviderStatusResponse,
-    summary="Return the active AI provider's reachability + mode list.",
-)
-def provider_status(
-    current_user: Annotated[User, Depends(get_current_user)],
-    assistant_service: Annotated[
-        AssistantProviderService, Depends(_provider_status_service)
-    ],
-) -> ChatProviderStatusResponse:
-    """Surface provider name, model, and availability for the chat header.
-
-    H7.8C — the response never includes the API key, the
-    Authorization header, or the upstream base URL. The frontend
-    uses the data to render the "Ollama connected" / "Provider
-    unavailable" dot + the mode toggle.
-    """
-    status_payload = assistant_service.provider_status()
-    return ChatProviderStatusResponse.model_validate(status_payload)

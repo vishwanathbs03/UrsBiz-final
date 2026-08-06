@@ -4,7 +4,7 @@
 #
 # Usage:
 #   deployment/scripts/healthcheck.sh                       # uses defaults
-#   PROXY_URL=https://atlas.example.com healthcheck.sh     # public check
+#   PROXY_URL=https://ursbiz.example.com healthcheck.sh     # public check
 #
 # The script hits the public URL (defaults to http://localhost:8080)
 # and walks the stack: nginx -> frontend -> backend. A failure prints

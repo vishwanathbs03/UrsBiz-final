@@ -50,6 +50,7 @@ export type ConsoleEntry = {
 
 export type DemoFixtures = {
   consoleSink: { entries: ConsoleEntry[]; failed: FailedRequest[] };
+  demoLogin: () => Promise<void>;
 };
 
 /* --------------------------- test extension --------------------------- */
@@ -79,6 +80,18 @@ export const test = base.extend<DemoFixtures>({
 
     page.off("console", onConsole);
     page.off("requestfailed", onRequestFailed);
+  },
+
+  demoLogin: async ({ page }, use) => {
+    const fn = async () => {
+      const { email, password } = requireDemoCreds();
+      await page.goto(`${E2E_BASE_URL}/login`);
+      await page.fill('input[type="email"]', email);
+      await page.fill('input[type="password"]', password);
+      await page.click('button[type="submit"]');
+      await page.waitForURL((url) => !url.pathname.includes("/login"));
+    };
+    await use(fn);
   },
 });
 

@@ -173,6 +173,8 @@ class EvidenceRegistry:
             self._entries = ()
             return
         entries: list[EvidenceEntry] = []
+        entries.extend(self._from_overall_score(context))
+        entries.extend(self._from_user_prompt_echoes(context))
         entries.extend(self._from_scores(context))
         entries.extend(self._from_recommendations(context))
         entries.extend(self._from_rules(context))
@@ -254,6 +256,87 @@ class EvidenceRegistry:
         return "\n".join(lines)
 
     # ---- internal projectors ----------------------------------------- #
+
+    @staticmethod
+    def _from_overall_score(
+        context: AssistantContext,
+    ) -> Iterable[EvidenceEntry]:
+        """Emit a single ``score_overall`` registry entry so the
+        grounding validator's ``no_invented_numbers`` rule has a
+        numeric anchor for the headline business score that the
+        model inevitably quotes.
+
+        The entry is synthetic — it carries no upstream fact the
+        context didn't already expose; it just normalises the
+        headline score into the same evidence contract that the
+        per-pillar scores use. Without it, the validator flags
+        ``82`` (or whatever the headline score is) as an
+        unsupported numeric literal whenever the model mentions
+        the headline score in its answer.
+        """
+        score = getattr(context, "overall_business_score", 0) or 0
+        if not score:
+            return
+        band = getattr(context, "band", "") or ""
+        level = band.title() if band else ""
+        value = f"{score}/100" + (f" ({level})" if level else "")
+        yield EvidenceEntry(
+            id="score_overall",
+            kind=EvidenceKind.SCORE,
+            label=_clean("Overall business score", cap=_LABEL_CAP),
+            value=_clean(value, cap=_VALUE_CAP),
+            source_topic="Twin",
+        )
+
+    @staticmethod
+    def _from_user_prompt_echoes(
+        context: AssistantContext,
+    ) -> Iterable[EvidenceEntry]:
+        """Emit registry entries that anchor the numeric literals
+        the user is allowed to mention: revenue figures the model
+        echoes back from the user's own prompt.
+
+        H7.8C — Gemini's prose output quotes the user's prompt
+        numbers (e.g. ``₹1.8 Cr to ₹3 Cr``) verbatim. Those are
+        NOT invented — they're the user's own stated targets. The
+        ``no_invented_numbers`` rule has no way to know that
+        without a registry entry. We synthesise one from
+        ``business_id`` / annual-revenue shape (when present in
+        the context) so the validator passes.
+
+        For now we emit a single ``biz_profile_revenue`` entry
+        whose value contains the headline numeric. The context
+        builder does not currently project annual_revenue (it
+        lives in the businesses table, not the twin), so we read
+        it via the context's optional ``annual_revenue_inr``
+        attribute if a future commit wires it; absent that, this
+        is a no-op and the prose-recovery path continues to use
+        approximation qualifiers.
+        """
+        # Best-effort: read optional attribute (set by future
+        # context-builder revisions that expose annual_revenue).
+        revenue_inr = getattr(context, "annual_revenue_inr", 0) or 0
+        if not revenue_inr:
+            return
+        # Convert to Cr for the prompt (1 Cr = 10,000,000 INR).
+        # H7.8C — round to 2 dp but DROP trailing zeros so the
+        # registry value matches what the user typed (e.g.
+        # "₹1.8 Cr" not "₹1.80 Cr"). The grounding validator's
+        # ``no_invented_numbers`` rule does literal-string
+        # matching; ``1.80`` would not match the user's
+        # quoted ``1.8`` and would falsely flag the user's own
+        # prompt number as invented.
+        cr_value = round(revenue_inr / 10_000_000, 2)
+        cr_str = f"{cr_value:.2f}".rstrip("0").rstrip(".")
+        yield EvidenceEntry(
+            id="biz_profile_revenue",
+            kind=EvidenceKind.SCORE,
+            label=_clean("Annual revenue baseline", cap=_LABEL_CAP),
+            value=_clean(
+                f"₹{cr_str} Cr (INR {revenue_inr:,})", cap=_VALUE_CAP,
+            ),
+            source_topic="Profile",
+        )
 
     @staticmethod
     def _from_scores(context: AssistantContext) -> Iterable[EvidenceEntry]:

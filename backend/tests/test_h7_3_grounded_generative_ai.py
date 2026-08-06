@@ -463,10 +463,10 @@ def test_schema_validator_chat_body_renders_all_sections() -> None:
     result = parse_model_output(json.dumps(payload))
     assert result.ok and result.response is not None
     body = result.response.to_chat_body()
-    # All four primary sections must be present in the chat body.
-    assert "Key findings" in body
-    assert "Recommended next actions" in body
-    assert "30-day plan" in body
+    body_upper = body.upper()
+    assert "KEY FINDINGS" in body_upper
+    assert "RECOMMENDED NEXT ACTIONS" in body_upper
+    assert "30-DAY" in body_upper
     assert "Model confidence: 72/100" in body
 
 

@@ -148,6 +148,12 @@ export interface ChatGenerationMeta {
     | "provider_unavailable"
     | "timeout"
     | "rate_limited"
+    | "quota_exhausted"
+    | "auth_failed"
+    | "config_error"
+    | "circuit_open"
+    | "offline_snapshot"
+    | "primary_provider_unavailable"
     | "provider_error"
     | "http_4xx"
     | "http_5xx"
@@ -158,7 +164,7 @@ export interface ChatGenerationMeta {
     | "not_configured"
     | "open_mode_provider_failure"
     | null;
-  generation_method: "generative" | "deterministic";
+  generation_method: "generative" | "deterministic" | "offline_snapshot";
   schema_validated: boolean;
   grounding_validated: boolean;
   server_grounding_score: number;
@@ -171,6 +177,12 @@ export interface ChatGenerationMeta {
   prompt_truncated: boolean;
   provider_latency_ms: number | null;
   grounded_payload?: ChatGroundedResponse | null;
+  business_evidence_validated?: boolean;
+  context_manifest?: {
+    business_context_used: string[];
+    records_used: number;
+    prompt_truncated: boolean;
+  } | null;
 }
 
 export interface ChatGroundedEvidenceReference {
@@ -216,6 +228,18 @@ export interface ChatGroundedResponse {
   confidence: number;
   evidence_references: ChatGroundedEvidenceReference[];
   server_grounding_score: number;
+  business_facts?: string[];
+  situation_assessment?: string;
+  reasoning?: string;
+  root_causes?: string[];
+  priority_matrix?: Array<{
+    action: string;
+    impact: string;
+    effort: string;
+    priority_category: string;
+  }>;
+  roi_estimate?: string;
+  risks?: string[];
 }
 
 /**

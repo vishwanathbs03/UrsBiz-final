@@ -73,7 +73,7 @@
   <text x="55" y="268" class="sub" fill="#065F46">Same profile inputs → same outputs every run. No external models.</text>
 
   <rect x="55" y="285" width="200" height="148" rx="10" class="box-deterministic"/>
-  <text x="70" y="310" class="label">Health Score Engine</text>
+  <text x="70" y="310" class="label">Profile Readiness Engine</text>
   <text x="70" y="328" class="sub">0–100 across 4 lenses</text>
   <text x="70" y="344" class="sub">• Financial Stability</text>
   <text x="70" y="360" class="sub">• Operational Risk</text>
@@ -83,7 +83,7 @@
 
   <rect x="275" y="285" width="200" height="148" rx="10" class="box-deterministic"/>
   <text x="290" y="310" class="label">Scheme Profile-Match</text>
-  <text x="290" y="328" class="sub">14+ schemes from catalog</text>
+  <text x="290" y="328" class="sub">7 curated schemes (CGTMSE, ZED, PMEGP, MAI, MUDRA Shishu, NSIC, Udyam)</text>
   <text x="290" y="344" class="sub">• Match % per rule</text>
   <text x="290" y="360" class="sub">• Source + last-verified</text>
   <text x="290" y="376" class="sub">• Disclaimer per match</text>
@@ -142,7 +142,7 @@
   <text x="1000" y="300" class="sub">• SQLAlchemy 2 + Alembic migrations</text>
   <text x="1000" y="328" class="label">Government Scheme Catalog</text>
   <text x="1000" y="346" class="sub">• Versioned YAML/JSON on disk</text>
-  <text x="1000" y="362" class="sub">• 14+ entries (MSME / NSIC / TUF / ZED)</text>
+  <text x="1000" y="362" class="sub">• 7 curated entries (CGTMSE, ZED, PMEGP, MAI, MUDRA Shishu, NSIC, Udyam)</text>
   <text x="1000" y="378" class="sub">• Cited authority + last-verified date</text>
   <text x="1000" y="394" class="sub">• Loaded into a knowledge base at startup</text>
 

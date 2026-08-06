@@ -33,19 +33,19 @@ export function NavbarAuth() {
   if (status === "authenticated" && user) {
     const initial = user.full_name.trim().charAt(0).toUpperCase() || "?";
     return (
-      <div className="hidden items-center gap-3 md:flex">
-        <div className="flex items-center gap-2 rounded-full border border-border bg-card px-2.5 py-1">
+      <div className="hidden items-center gap-3 md:flex shrink-0">
+        <div className="hidden lg:flex items-center gap-2 rounded-full border border-border bg-card px-2.5 py-1 max-w-[180px]">
           <span
             aria-hidden="true"
-            className="flex size-6 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary"
+            className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary"
           >
             {initial}
           </span>
-          <span className="text-sm font-medium text-foreground">
+          <span className="truncate text-sm font-medium text-foreground">
             {user.full_name}
           </span>
         </div>
-        <Button variant="ghost" size="sm" onClick={onSignOut} disabled={busy}>
+        <Button variant="ghost" size="sm" onClick={onSignOut} disabled={busy} className="shrink-0">
           <LogOut className="size-4" aria-hidden="true" />
           {busy ? "Signing out…" : "Sign out"}
         </Button>

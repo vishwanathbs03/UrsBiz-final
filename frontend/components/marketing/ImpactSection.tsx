@@ -3,14 +3,14 @@ import { Building, Globe, Flame, Clock } from "lucide-react";
 const stats = [
   {
     val: "0–100",
-    label: "Business Health Score",
-    desc: "Deterministic score across financial, operational, sales, and compliance pillars.",
+    label: "Profile Readiness Score",
+    desc: "Deterministic measure of how completely the business profile is filled in across six weighted sections. Same inputs always produce the same score.",
     icon: Building,
   },
   {
-    val: "14+",
-    label: "Scheme Profile-Matches",
-    desc: "Official MSME / NSIC / TUF / ZED schemes with last-verified date and disclaimer.",
+    val: "7",
+    label: "Curated Schemes & Registrations",
+    desc: "CGTMSE, ZED, PMEGP, MAI, MUDRA Shishu, NSIC, Udyam — each with official authority, last-verified date and disclaimer.",
     icon: Globe,
   },
   {

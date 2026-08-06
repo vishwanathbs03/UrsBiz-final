@@ -7,9 +7,9 @@ const comparisons = [
     ursbiz: "Real-time AI-driven business health scoring",
   },
   {
-    feature: "Health Scoring",
+    feature: "Profile Readiness Score",
     traditional: "Fragmented spreadsheets with zero unified index",
-    ursbiz: "Unified 0-100 Business Health Score across 8 categories",
+    ursbiz: "Unified 0-100 Profile Readiness Score across 6 weighted sections — measures how complete the digital twin is",
   },
   {
     feature: "Government Schemes",

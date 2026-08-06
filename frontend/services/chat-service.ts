@@ -28,7 +28,7 @@ export interface ChatGenerationMeta {
   mode: "grounded" | "open";
   fallback_used: boolean;
   fallback_reason: string | null;
-  generation_method: "generative" | "deterministic";
+  generation_method: "generative" | "deterministic" | "offline_snapshot";
   schema_validated: boolean;
   grounding_validated: boolean;
   server_grounding_score: number;

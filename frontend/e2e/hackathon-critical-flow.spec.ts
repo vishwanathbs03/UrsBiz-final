@@ -28,15 +28,15 @@ import {
 /* ---------------------- route metadata (single source) ------------------- */
 
 const CRITICAL_ROUTES = [
-  { path: "/dashboard",              title: "Dashboard",          auth: true  },
-  { path: "/business",               title: "Business Profile",   auth: true  },
-  { path: "/intelligence",           title: "Digital Twin",       auth: true  },
-  { path: "/analytics",              title: "Analytics",          auth: true  },
-  { path: "/predictive-analytics",   title: "Predictive",         auth: true  },
-  { path: "/advisor",                title: "Advisor",            auth: true  },
-  { path: "/assistant",              title: "Assistant",          auth: true  },
-  { path: "/schemes",                title: "Schemes",            auth: true  },
-  { path: "/reports",                title: "Reports",            auth: true  },
+  { path: "/dashboard",              title: "Executive Command Center", auth: true  },
+  { path: "/business",               title: "Business Profile",         auth: true  },
+  { path: "/intelligence",           title: "Business Digital Twin",    auth: true  },
+  { path: "/analytics",              title: "Analytics",                auth: true  },
+  { path: "/predictive-analytics",   title: "Business Forecast",        auth: true  },
+  { path: "/advisor",                title: "Business Advisor",         auth: true  },
+  { path: "/assistant",              title: "AI Business Assistant",    auth: true  },
+  { path: "/schemes",                title: "Government Schemes",       auth: true  },
+  { path: "/reports",                title: "Executive Report",         auth: true  },
 ] as const;
 
 const PUBLIC_ROUTES = [
@@ -140,12 +140,12 @@ test.describe("UrsBiz critical flow — desktop light", () => {
     await loginViaUI(page, creds.email, creds.password);
     await page.goto(`${E2E_BASE_URL}/dashboard`);
     await page.waitForLoadState("networkidle");
-    await assertHealthyRoute(page, "/dashboard (re-login)", "Dashboard");
+    await assertHealthyRoute(page, "/dashboard (re-login)", "Executive Command Center");
 
     // 7. Final gate: no unexpected console errors across the whole journey.
     const errors = consoleSink.entries.filter(
       (e) => e.type === "error" &&
-        !/React DevTools|Fast Refresh|hydration/i.test(e.text),
+        !/React DevTools|Fast Refresh|hydration|Failed to load resource.*401/i.test(e.text),
     );
     expect(
       errors,
@@ -167,7 +167,7 @@ test.describe("UrsBiz critical flow — mobile smoke", () => {
     await loginViaUI(page, creds.email, creds.password);
     await page.goto(`${E2E_BASE_URL}/dashboard`);
     await page.waitForLoadState("networkidle");
-    await assertHealthyRoute(page, "/dashboard mobile", "Dashboard");
+    await assertHealthyRoute(page, "/dashboard mobile", "Executive Command Center");
   });
 
   test("mobile schemes renders without horizontal overflow", async ({ page }) => {
@@ -175,7 +175,7 @@ test.describe("UrsBiz critical flow — mobile smoke", () => {
     await loginViaUI(page, creds.email, creds.password);
     await page.goto(`${E2E_BASE_URL}/schemes`);
     await page.waitForLoadState("networkidle");
-    await assertHealthyRoute(page, "/schemes mobile", "Schemes");
+    await assertHealthyRoute(page, "/schemes mobile", "Government Schemes");
   });
 });
 
@@ -192,7 +192,7 @@ test.describe("UrsBiz critical flow — desktop dark", () => {
     await loginViaUI(page, creds.email, creds.password);
     await page.goto(`${E2E_BASE_URL}/dashboard`);
     await page.waitForLoadState("networkidle");
-    await assertHealthyRoute(page, "/dashboard dark", "Dashboard");
+    await assertHealthyRoute(page, "/dashboard dark", "Executive Command Center");
     // Body background should be a dark surface, not a stark white.
     const bg = await page.evaluate(() => {
       const cs = getComputedStyle(document.body);

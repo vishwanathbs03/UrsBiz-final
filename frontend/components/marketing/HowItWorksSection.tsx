@@ -25,8 +25,8 @@ const workflowSteps = [
   },
   {
     step: "03",
-    title: "Health Score",
-    description: "Receive your unified 0-100 Health Index & category sub-scores.",
+    title: "Profile Readiness Score",
+    description: "Receive your 0-100 Profile Readiness Score & section sub-scores (profile completeness — not a business risk measure).",
     icon: ShieldCheck,
   },
   {

@@ -4,6 +4,8 @@
 > Execution Program. Delivered on `release/hackathon-clean`
 > @ `ef2890c3132f831ddcd95c1e11faab8b47124945` on 2026-08-05.
 
+> **H7.8A correction note (2026-08-05):** The smoke-test row "200, 14+ schemes" in §3.2 is **incorrect**. The authoritative source — `backend/app/services/schemes_sprint16_service.py` `SCHEMES_CATALOG` — contains **7 entries**. The route returned 200 with the seven curated schemes matched for the demo workspace. All "14+ schemes" claims in this report are superseded by the H7.8A truth-repair pass.
+
 ---
 
 ## 1. What this prompt asked for

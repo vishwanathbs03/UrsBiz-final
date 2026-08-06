@@ -4,6 +4,8 @@
 > Execution Program. Delivered on `release/hackathon-clean`
 > @ `ef2890c3132f831ddcd95c1e11faab8b47124945` on 2026-08-05.
 
+> **H7.8A correction note (2026-08-05):** The "14+ matched schemes" figure cited in this report is **incorrect**. The authoritative source — `backend/app/services/schemes_sprint16_service.py` `SCHEMES_CATALOG` — contains **7 entries** (CGTMSE, ZED, PMEGP, MAI, MUDRA Shishu, NSIC, Udyam). The 14-article figure refers to a separate `knowledge_catalog.json` used as the assistant's knowledge base, which is unrelated to scheme profile-matching. All 14+ claims in this report and its derivative docs are superseded by the H7.8A truth-repair pass (`H7_8A_SUBMISSION_TRUTH_REPAIR_REPORT.md`).
+
 ---
 
 ## 1. What this prompt asked for

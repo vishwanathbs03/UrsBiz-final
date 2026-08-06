@@ -27,11 +27,11 @@ The builder is stateless. Two calls with the same
 :class:`AssistantContext` instances (sans the response envelope's
 ``generated_at``).
 """
-from __future__ import annotations
-
+from dataclasses import replace
 from typing import Any
 
 from app.services.ai.providers.base import (
+    AnalyticsMetric,
     AssistantContext,
     AssistantContextActionItem,
     AssistantContextDna,
@@ -42,6 +42,8 @@ from app.services.ai.providers.base import (
     AssistantContextRule,
     AssistantContextScheme,
     AssistantContextScore,
+    BusinessContextManifest,
+    ReportSummary,
 )
 
 
@@ -58,26 +60,12 @@ _MAX_INSIGHTS = 8
 _MAX_SCHEMES = 8
 _MAX_FORECASTS = 4
 _MAX_ACTION_ITEMS = 6
+_MAX_ANALYTICS = 10
+_MAX_REPORTS = 5
 
 
 class AssistantContextBuilder:
-    """Build an :class:`AssistantContext` from the upstream payloads.
-
-    The builder takes the *responses* from the five upstream
-    service methods:
-
-      * ``twin.compute(owner_id)``
-      * ``recommendations.compute(owner_id)``
-      * ``roadmap.compute(owner_id)``
-      * ``rules.compute(owner_id)``
-      * ``insights`` = the AI Decision engine's
-        ``decision.insights`` (Sprint 3 Part 2)
-
-    Each input is a plain dict — the builder never reaches into
-    a service directly. The constructor accepts five callables
-    that produce these dicts so the verifier and any future
-    unit test can swap in synthetic fixtures.
-    """
+    """Build an :class:`AssistantContext` from the upstream payloads."""
 
     def __init__(
         self,
@@ -90,18 +78,23 @@ class AssistantContextBuilder:
         schemes_provider=None,
         forecast_provider=None,
         action_board_provider=None,
+        profile_provider=None,
+        analytics_provider=None,
+        reports_provider=None,
     ) -> None:
         self._twin = twin_provider
         self._recs = recommendations_provider
         self._roadmap = roadmap_provider
         self._rules = rules_provider
         self._insights = insights_provider
-        # H7.3 — optional. None is treated as "no data".
         self._schemes = schemes_provider or (lambda _owner: {})
         self._forecast = forecast_provider or (lambda _owner: {})
         self._action_board = action_board_provider or (lambda _owner: {})
+        self._profile = profile_provider or (lambda _owner: {})
+        self._analytics = analytics_provider or (lambda _owner: {})
+        self._reports = reports_provider or (lambda _owner: {})
 
-    def build(self, *, owner_id: int) -> AssistantContext:
+    def build(self, *, owner_id: int, user_prompt: str = "") -> AssistantContext:
         twin = self._twin(owner_id)
         recs = self._recs(owner_id)
         roadmap = self._roadmap(owner_id)
@@ -110,8 +103,15 @@ class AssistantContextBuilder:
         schemes = self._schemes(owner_id)
         forecast = self._forecast(owner_id)
         action_board = self._action_board(owner_id)
+        profile = self._profile(owner_id)
+        analytics = self._analytics(owner_id)
+        reports = self._reports(owner_id)
 
-        return AssistantContext(
+        p_details = _project_profile_details(profile, twin)
+        analytics_metrics = _project_analytics(analytics)
+        report_summaries = _project_reports(reports)
+
+        ctx = AssistantContext(
             business_id=int(owner_id),
             overall_business_score=_overall_score(twin),
             band=_band(_overall_score(twin)),
@@ -124,6 +124,26 @@ class AssistantContextBuilder:
             schemes=_project_schemes(schemes),
             forecasts=_project_forecasts(forecast),
             action_items=_project_action_items(action_board),
+            annual_revenue_inr=_annual_revenue_inr(profile),
+            legal_name=p_details.get("legal_name", "unknown"),
+            trade_name=p_details.get("trade_name", "unknown"),
+            industry=p_details.get("industry", "unknown"),
+            sub_industry=p_details.get("sub_industry", "unknown"),
+            business_type=p_details.get("business_type", "unknown"),
+            location=p_details.get("location", "unknown"),
+            employee_count=p_details.get("employee_count", "unknown"),
+            target_revenue_inr=p_details.get("target_revenue_inr", 0),
+            products=tuple(p_details.get("products", [])),
+            services=tuple(p_details.get("services", [])),
+            certifications=tuple(p_details.get("certifications", [])),
+            digital_presence=tuple(p_details.get("digital_presence", [])),
+            export_history=tuple(p_details.get("export_history", [])),
+            goals=tuple(p_details.get("goals", [])),
+            challenges=tuple(p_details.get("challenges", [])),
+            supplier_dependencies=tuple(p_details.get("supplier_dependencies", [])),
+            customer_dependencies=tuple(p_details.get("customer_dependencies", [])),
+            analytics_metrics=analytics_metrics,
+            report_summaries=report_summaries,
             twin_generated_at=twin.get("generated_at") if isinstance(twin, dict) else None,
             recommendations_generated_at=recs.get("generated_at") if isinstance(recs, dict) else None,
             roadmap_generated_at=roadmap.get("generated_at") if isinstance(roadmap, dict) else None,
@@ -135,6 +155,8 @@ class AssistantContextBuilder:
             action_items_generated_at=(action_board.get("generated_at")
                                        if isinstance(action_board, dict) else None),
         )
+
+        return select_relevant_context(ctx, user_prompt)
 
 
 # --------------------------------------------------------------------------- #
@@ -470,3 +492,288 @@ def _safe_float(*candidates: Any) -> float:
         except (TypeError, ValueError):
             continue
     return 0.0
+
+
+# Approximate USD→INR rate. The exact rate is irrelevant
+# for the grounding registry — we only need to anchor the
+# magnitude. Using a stable constant keeps the registry
+# deterministic across requests.
+_USD_TO_INR = 83.0
+
+
+def _annual_revenue_inr(profile: Any) -> int:
+    """Convert the ``profile_provider`` payload to INR int.
+
+    Accepts dicts with ``annual_revenue`` (float) and an
+    optional ``revenue_currency`` (str, ISO 4217). USD
+    figures are converted at ``_USD_TO_INR``; other
+    currencies pass through unchanged (the registry value
+    is shown verbatim). Returns 0 when the payload is
+    empty / missing — the registry then skips the entry
+    and the ``no_invented_numbers`` rule will flag
+    user-prompted revenue figures. Tests should pass a
+    non-empty profile payload to exercise the path.
+    """
+    if not isinstance(profile, dict):
+        return 0
+    raw = profile.get("annual_revenue")
+    if raw is None:
+        return 0
+    try:
+        amount = float(raw)
+    except (TypeError, ValueError):
+        return 0
+    if amount <= 0:
+        return 0
+    currency = str(profile.get("revenue_currency", "USD") or "USD").upper()
+    if currency == "USD":
+        return int(round(amount * _USD_TO_INR))
+    if currency == "INR":
+        return int(round(amount))
+    # Unrecognised currency — assume already in INR; this is
+    # the conservative default that keeps the registry value
+    # close to the user's stated figure.
+    return int(round(amount))
+
+
+def _project_profile_details(profile: Any, twin: Any) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "legal_name": "unknown",
+        "trade_name": "unknown",
+        "industry": "unknown",
+        "sub_industry": "unknown",
+        "business_type": "unknown",
+        "location": "unknown",
+        "employee_count": "unknown",
+        "target_revenue_inr": 0,
+        "products": [],
+        "services": [],
+        "certifications": [],
+        "digital_presence": [],
+        "export_history": [],
+        "goals": [],
+        "challenges": [],
+        "supplier_dependencies": [],
+        "customer_dependencies": [],
+    }
+    if isinstance(twin, dict):
+        identity = twin.get("identity") or {}
+        if isinstance(identity, dict):
+            if identity.get("legal_name"):
+                out["legal_name"] = str(identity["legal_name"])
+            if identity.get("trade_name"):
+                out["trade_name"] = str(identity["trade_name"])
+            if identity.get("industry"):
+                out["industry"] = str(identity["industry"])
+            if identity.get("sub_industry"):
+                out["sub_industry"] = str(identity["sub_industry"])
+
+    if not isinstance(profile, dict):
+        return out
+
+    if profile.get("legal_name"):
+        out["legal_name"] = str(profile["legal_name"])
+    if profile.get("trade_name"):
+        out["trade_name"] = str(profile["trade_name"])
+    if profile.get("industry"):
+        out["industry"] = str(profile["industry"])
+    if profile.get("sub_industry"):
+        out["sub_industry"] = str(profile["sub_industry"])
+    if profile.get("business_type"):
+        out["business_type"] = str(profile["business_type"])
+
+    city = profile.get("city") or ""
+    state = profile.get("state_region") or ""
+    country = profile.get("country") or ""
+    loc_parts = [p for p in [city, state, country] if p]
+    if loc_parts:
+        out["location"] = ", ".join(loc_parts)
+
+    emp = profile.get("employee_count")
+    if emp is not None:
+        out["employee_count"] = str(emp)
+
+    tr = profile.get("target_revenue")
+    if tr is not None:
+        out["target_revenue_inr"] = _safe_int(tr)
+
+    for key in [
+        "products",
+        "services",
+        "certifications",
+        "digital_presence",
+        "export_history",
+        "goals",
+        "challenges",
+        "supplier_dependencies",
+        "customer_dependencies",
+    ]:
+        raw_items = profile.get(key)
+        if isinstance(raw_items, list):
+            item_strings = []
+            for item in raw_items:
+                if isinstance(item, str):
+                    item_strings.append(item)
+                elif isinstance(item, dict):
+                    name = item.get("name") or item.get("title") or item.get("description") or str(item)
+                    item_strings.append(name)
+            out[key] = item_strings
+
+    return out
+
+
+def _project_analytics(analytics: Any) -> tuple[AnalyticsMetric, ...]:
+    if not isinstance(analytics, dict):
+        return ()
+    items = analytics.get("metrics") or analytics.get("kpis") or analytics.get("items") or []
+    if not isinstance(items, list):
+        if isinstance(analytics, dict) and "growth_score" in analytics:
+            items = [
+                {"id": "growth_score", "name": "Growth Score", "value": analytics.get("growth_score")},
+                {"id": "digital_readiness", "name": "Digital Readiness", "value": analytics.get("digital_readiness")},
+                {"id": "operational_maturity", "name": "Operational Maturity", "value": analytics.get("operational_maturity")},
+                {"id": "market_presence", "name": "Market Presence", "value": analytics.get("market_presence")},
+                {"id": "customer_reach", "name": "Customer Reach", "value": analytics.get("customer_reach")},
+            ]
+        else:
+            return ()
+    out: list[AnalyticsMetric] = []
+    for raw in items[:_MAX_ANALYTICS]:
+        if not isinstance(raw, dict):
+            continue
+        mid = str(raw.get("id") or raw.get("metric_id") or raw.get("name") or "")
+        if not mid:
+            continue
+        out.append(AnalyticsMetric(
+            metric_id=mid,
+            metric_name=str(raw.get("name") or raw.get("title") or mid),
+            current_value=raw.get("value") or raw.get("current_value") or 0,
+            unit=str(raw.get("unit") or ""),
+            time_period=str(raw.get("time_period") or raw.get("period") or "current"),
+            trend=str(raw.get("trend") or "stable"),
+            baseline=str(raw.get("baseline") or ""),
+            method=str(raw.get("method") or "calculated"),
+            updated_at=str(raw.get("updated_at") or ""),
+        ))
+    return tuple(out)
+
+
+def _project_reports(reports: Any) -> tuple[ReportSummary, ...]:
+    if not isinstance(reports, dict):
+        return ()
+    items = reports.get("reports") or reports.get("summaries") or []
+    if not isinstance(items, list):
+        rep = reports.get("report")
+        if isinstance(rep, dict):
+            items = [rep]
+        else:
+            return ()
+    out: list[ReportSummary] = []
+    for raw in items[:_MAX_REPORTS]:
+        if not isinstance(raw, dict):
+            continue
+        exec_sum = ""
+        if isinstance(raw.get("executive_summary"), dict):
+            exec_sum = str(raw["executive_summary"].get("summary_text") or raw["executive_summary"].get("headline") or "")
+        elif isinstance(raw.get("executive_summary"), str):
+            exec_sum = raw["executive_summary"]
+
+        rid = str(raw.get("report_id") or raw.get("id") or "report_1")
+        out.append(ReportSummary(
+            report_id=rid,
+            report_type=str(raw.get("report_type") or raw.get("type") or "unified_business_report"),
+            generated_at=str(raw.get("generated_at") or ""),
+            executive_summary=exec_sum,
+            key_metrics=tuple(raw.get("key_metrics") or ()),
+            risks=tuple(raw.get("risks") or ()),
+            recommendations=tuple(raw.get("recommendations") or ()),
+            assumptions=tuple(raw.get("assumptions") or ()),
+        ))
+    return tuple(out)
+
+
+def select_relevant_context(
+    context: AssistantContext,
+    user_prompt: str = "",
+) -> AssistantContext:
+    """Build a relevant, bounded context bundle and attach BusinessContextManifest."""
+    categories: list[str] = []
+    records = 0
+
+    if context.legal_name != "unknown" or context.annual_revenue_inr > 0 or context.industry != "unknown":
+        categories.append("business_profile")
+        records += 1
+
+    if context.products:
+        categories.append("products")
+        records += len(context.products)
+
+    if context.services:
+        categories.append("services")
+        records += len(context.services)
+
+    if context.certifications:
+        categories.append("certifications")
+        records += len(context.certifications)
+
+    if context.export_history:
+        categories.append("export_history")
+        records += len(context.export_history)
+
+    if context.scores:
+        categories.append("readiness_scores")
+        records += len(context.scores)
+
+    if context.recommendations:
+        categories.append("recommendations")
+        records += len(context.recommendations)
+
+    if context.roadmap:
+        categories.append("roadmap")
+        records += len(context.roadmap)
+
+    if context.rules:
+        categories.append("rules")
+        records += len(context.rules)
+
+    if context.insights:
+        categories.append("insights")
+        records += len(context.insights)
+
+    if context.schemes:
+        categories.append("scheme_matches")
+        records += len(context.schemes)
+
+    if context.forecasts:
+        categories.append("forecasts")
+        records += len(context.forecasts)
+
+    if context.action_items:
+        categories.append("action_board")
+        records += len(context.action_items)
+
+    if context.analytics_metrics:
+        categories.append("analytics")
+        records += len(context.analytics_metrics)
+
+    if context.report_summaries:
+        categories.append("report_summary")
+        records += len(context.report_summaries)
+
+    from app.services.ai.knowledge.knowledge_graph import BusinessKnowledgeGraph
+    from app.services.ai.knowledge.relationship_engine import RelationshipEngine
+    from app.services.ai.knowledge.priority_engine import PriorityEngine
+
+    kg = BusinessKnowledgeGraph.from_context(context)
+    rel_engine = RelationshipEngine()
+    rel_engine.infer_and_link_relationships(kg)
+    p_engine = PriorityEngine()
+    p_engine.score_nodes(kg)
+
+    manifest = BusinessContextManifest(
+        business_context_used=tuple(categories),
+        records_used=records,
+        prompt_truncated=False,
+    )
+
+    return replace(context, context_manifest=manifest, knowledge_graph=kg)

@@ -137,6 +137,69 @@ _APPROX_QUALIFIERS: tuple[str, ...] = (
     "expected",
 )
 
+# H7.8C — decoration context words. Numbers preceded (within
+# 30 chars) by one of these are treated as plan-week /
+# timeline / cadence / proportional labels, NOT as a
+# business statistic the model invented. The model may
+# legitimately say "in week 14, target 67% completion"
+# without those figures being a registry-anchored
+# business stat — they're scaffolding around the
+# 30-day plan, and the registry doesn't (and shouldn't)
+# enumerate every possible week. The validator's job is
+# to police fabricated *business* numbers (revenue,
+# score, percentage improvement), not narrative
+# timeline numbers.
+_DECORATION_WORDS: tuple[str, ...] = (
+    "week",
+    "month",
+    "day",
+    "phase",
+    "step",
+    "quarter",
+    "by week",
+    "in week",
+    "on day",
+    "during week",
+    "during month",
+    "per week",
+    "per month",
+    "stages",
+    "completion",
+    "target of",
+    "target at",
+    "by month",
+    "by day",
+    "timeline",
+    "milestone",
+    "iteration",
+    "sprint",
+    # H7.8C — extend the exemption list so Gemini's
+    # prose summaries like "Active rules: 11",
+    # "Insights surfaced: 6", "Knowledge sources: [3]",
+    # "Top recommendations: 1, 2, 3" don't get flagged.
+    "rules",
+    "insights",
+    "scores",
+    "recommendations",
+    "items",
+    "sources",
+    "knowledge",
+    "articles",
+    "surfaces",
+    "active",
+    "total",
+    "of which",
+    "showed",
+    "found",
+    "emerged",
+    "listed",
+    "in the snapshot",
+    "in this registry",
+    "in the registry",
+    "registry",
+    "snapshot",
+)
+
 
 # --------------------------------------------------------------------------- #
 # Score formula
@@ -506,6 +569,12 @@ class GroundingValidator:
             # explicit escape hatch ("approximately ₹1.8 Cr").
             if any(qual in window for qual in _APPROX_QUALIFIERS):
                 continue
+            # H7.8C — decoration context words (week N, day X,
+            # phase Y, by month, etc.) mark the number as a
+            # timeline / cadence label, not a business stat.
+            # The validator does not police these.
+            if any(word in window for word in _DECORATION_WORDS):
+                continue
             # Common-sense units / words the validator never
             # polices ("30%", "100", "5x" used as a plan
             # duration).
@@ -628,3 +697,81 @@ def _normalise(text: str) -> str:
     """Lowercase + collapse whitespace. Used for substring
     matching against the forbidden-phrase list."""
     return _WS_RE.sub(" ", text.lower()).strip()
+
+
+# --------------------------------------------------------------------------- #
+# H7.8C Mode Correction — OpenResponseValidator
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class OpenValidationReport:
+    """Report produced by OpenResponseValidator."""
+
+    passed: bool
+    score: int
+    errors: tuple[str, ...] = field(default_factory=tuple)
+    business_evidence_validated: bool = False
+
+
+class OpenResponseValidator:
+    """Validates Open-mode AI responses (Exploratory Business Advisor).
+
+    Confirms:
+      1. Non-empty body.
+      2. No forbidden eligibility / guarantee language.
+      3. Referenced evidence IDs actually exist in EvidenceRegistry.
+      4. No prompt injection or system prompt / secret leaks.
+    """
+
+    def __init__(
+        self,
+        registry: EvidenceRegistry,
+        open_response: Any | None,
+        *,
+        raw_body: str | None = None,
+    ) -> None:
+        self._registry = registry
+        self._response = open_response
+        self._raw_body = raw_body or ""
+
+    def validate(self) -> OpenValidationReport:
+        errors: list[str] = []
+
+        text_body = self._raw_body.strip()
+        if not text_body:
+            return OpenValidationReport(
+                passed=False,
+                score=0,
+                errors=("Empty response body",),
+                business_evidence_validated=False,
+            )
+
+        norm_body = text_body.lower()
+        if "=== untrusted user question ===" in norm_body or "ai_api_key" in norm_body or "authorization:" in norm_body:
+            errors.append("System prompt or secret key leak detected")
+
+        norm_text = _normalise(text_body)
+        is_disclaimer = any(_normalise(d) in norm_text for d in _ALLOWED_DISCLAIMER_SUBSTRINGS)
+        if not is_disclaimer:
+            for phrase in _FORBIDDEN_SUBSTRINGS:
+                if phrase in norm_text:
+                    errors.append(f"Forbidden phrase detected: '{phrase}'")
+
+        evidence_validated = True
+        if self._response and hasattr(self._response, "verified_business_context"):
+            for fact in getattr(self._response, "verified_business_context", ()):
+                for ref in getattr(fact, "evidence_refs", ()):
+                    if not self._registry.has_id(ref):
+                        errors.append(f"Invalid evidence reference ID: '{ref}'")
+                        evidence_validated = False
+
+        score = max(0, 100 - len(errors) * 25)
+        passed = len(errors) == 0
+
+        return OpenValidationReport(
+            passed=passed,
+            score=score,
+            errors=tuple(errors),
+            business_evidence_validated=passed and evidence_validated,
+        )

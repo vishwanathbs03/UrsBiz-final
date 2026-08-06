@@ -29,10 +29,12 @@ import { cn } from "@/lib/utils";
 export type TrustLabel =
   | "rule_engine"
   | "generated"
+  | "open_business"
   | "open_domain"
   | "scenario"
   | "official"
-  | "user_provided";
+  | "user_provided"
+  | "offline_snapshot";
 
 const COPY: Record<
   TrustLabel,
@@ -43,13 +45,23 @@ const COPY: Record<
     icon: Cpu,
     tone: "bg-emerald-500/10 text-emerald-700 border-emerald-500/30",
   },
+  offline_snapshot: {
+    text: "Offline demonstration snapshot — generated previously from a verified AI run.",
+    icon: Cpu,
+    tone: "bg-indigo-500/10 text-indigo-700 border-indigo-500/30",
+  },
   generated: {
-    text: "Generated explanation",
+    text: "Verified against UrsBiz business evidence",
     icon: Sparkles,
     tone: "bg-violet-500/10 text-violet-700 border-violet-500/30",
   },
+  open_business: {
+    text: "Exploratory AI analysis · Uses your business context",
+    icon: Globe,
+    tone: "bg-blue-500/10 text-blue-700 border-blue-500/30",
+  },
   open_domain: {
-    text: "Open-domain LLM — not grounded",
+    text: "General AI explanation",
     icon: Globe,
     tone: "bg-amber-500/10 text-amber-700 border-amber-500/30",
   },
@@ -135,28 +147,25 @@ export function TrustMeta({
   groundingScore,
   promptTruncated,
   providerLatencyMs,
+  contextManifest,
   className,
 }: {
   confidence?: number;
   assumptions?: readonly string[];
   limitations?: readonly string[];
   evidence?: readonly string[];
-  /** ISO 8601 timestamp from the upstream payload. */
   generatedAt?: string;
-  /** H7.8C — provider name (e.g. "openai_compatible"). Never
-   *  includes the base URL or API key. */
   provider?: string;
-  /** H7.8C — model identifier (e.g. "openai_compatible:llama3.1"). */
   model?: string;
-  /** H7.8C — fallback reason code. Rendered only when present. */
   fallbackReason?: string | null;
-  /** H7.8C — server grounding score 0..100. */
   groundingScore?: number;
-  /** H7.8C — whether the user prompt was truncated to fit the
-   *  provider's context window. */
   promptTruncated?: boolean;
-  /** H7.8C — provider round-trip latency in ms. */
   providerLatencyMs?: number;
+  contextManifest?: {
+    business_context_used: string[];
+    records_used: number;
+    prompt_truncated: boolean;
+  } | null;
   className?: string;
 }) {
   return (
@@ -171,6 +180,11 @@ export function TrustMeta({
         Why am I seeing this?
       </summary>
       <div className="mt-2 space-y-2 text-foreground/80">
+        {contextManifest && contextManifest.business_context_used && (
+          <p className="font-medium text-primary">
+            Used {contextManifest.business_context_used.length} business-information categories ({contextManifest.records_used} records)
+          </p>
+        )}
         {provider || model ? (
           <p>
             <span className="font-semibold">Provider:</span>{" "}

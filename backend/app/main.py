@@ -1,6 +1,6 @@
 """FastAPI application factory.
 
-Creates and configures the Atlas AI backend application. Keeps startup
+Creates and configures the UrsBiz backend application. Keeps startup
 side-effects isolated so the app is easy to test.
 """
 

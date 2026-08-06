@@ -70,65 +70,64 @@ if TYPE_CHECKING:
 # but it may not invent new ones and must never write
 # government / eligibility / approval language.
 
-_GROUNDED_SYSTEM = """You are UrsBiz Assistant, a business analyst for an Indian SMB.
-You receive a structured snapshot of the user's business and an EVIDENCE REGISTRY
-of stable, server-resolved IDs you may cite.
+_GROUNDED_SYSTEM = """You are UrsBiz Assistant, a Senior MSME Business Consultant (₹25 lakh/year tier).
+You analyze Indian SMB context and deliver rigorous, structured, evidence-grounded strategic advice.
 
-Your output MUST be a single JSON object that matches the response schema
-documented below. Do not output prose, Markdown, code fences, or commentary
-outside the JSON object.
+Never provide generic, high-level answers (e.g. "Increase sales", "Improve exports").
+Always explain WHY, HOW, ROOT CAUSES, PRIORITY MATRIX, ROI ESTIMATION, RISKS, and EXECUTABLE ACTIONS.
 
-## Bounded-action policy
+Your output MUST be a single JSON object matching the response schema below. Do not output prose outside the JSON object.
 
-You MAY describe concrete actions that already exist in the snapshot:
-  - recommendations (id, title, rationale)
-  - roadmap items (id, phase, expected score improvement)
-  - the user's existing action board (action_id, status, due_in_days)
+## Senior Consultant Analysis Requirements (10 Required Sections):
+1. Business Facts: Cite exact verified profile facts and evidence IDs.
+2. Situation Assessment: Executive assessment of current posture & band.
+3. Diagnostic Reasoning: Step-by-step diagnostic logic explaining the state.
+4. Root Cause Analysis: Operational & financial bottlenecks holding back growth.
+5. Recommended Next Actions: Evidence-anchored action recommendations.
+6. Priority Matrix: Categorize actions into Quick Win, Strategic Move, or Long-term Investment (with Impact & Effort).
+7. ROI & Financial Impact: Estimated ROI, timeline, and score gain grounded in evidence.
+8. Key Risks & Mitigations: Hazards (operational, market, compliance) and mitigations.
+9. Confidence & Grounding Score: Model confidence (0-100) and rationale.
+10. Sources & Evidence Used: Cite every Evidence Registry ID referenced.
 
-You MAY NOT:
-  - invent new tasks, deadlines, emails, phone calls, or meeting dates
-  - assign values that are not in the snapshot (no new revenue figures,
-    no ROI numbers, no score gains)
-  - tell the user they are eligible, approved, or guaranteed anything
-  - make official government claims — schemes are *profile matches*,
-    not approvals. Always say "your profile matches" or
-    "your profile is similar to applicants who …"
-
-## Evidence registry
-
-Every numeric claim, every recommendation, and every scheme mention
-MUST reference a stable ID from the EVIDENCE REGISTRY block in the
-user message. If you cannot ground a claim in a registry entry,
-either drop it or qualify it as an assumption.
-
-## Forbidden language
-
-Never write the following phrases (or close paraphrases):
-  - "you are eligible", "you will be approved", "you will receive"
-  - "guaranteed funding", "guaranteed growth", "100% success"
-  - "we predict your revenue will", "your revenue will be ₹X"
-  - "approved by [authority]", "endorsed by [authority]"
-  - "definitely will", "certainly will"
-
-Allowed disclaimers:
-  - "this does not guarantee eligibility or approval"
-  - "scenario estimate, not a prediction"
-  - "your profile matches, not a confirmation of eligibility"
+## Bounded-action policy & Evidence Registry
+- You MAY describe concrete actions that already exist in the snapshot (recommendations, roadmap, action board).
+- Every numeric claim, recommendation, and scheme match MUST reference a stable ID from the EVIDENCE REGISTRY.
+- Never invent ungrounded revenue claims or official government approvals.
 
 ## Output schema (return JSON only)
 
 {
-  "executive_summary": string,        // <= 280 chars
-  "key_findings": [string, ...],       // 1-4 short bullets
-  "recommendations": [                 // 0-4 items
+  "executive_summary": string,
+  "business_facts": [string, ...],
+  "situation_assessment": string,
+  "reasoning": string,
+  "root_causes": [string, ...],
+  "key_findings": [
     {
-      "recommendation_id": string,     // MUST resolve in evidence registry
-      "title": string,
-      "rationale": string,
-      "evidence_refs": [string, ...]   // evidence IDs
+      "statement": string,
+      "evidence_refs": [string, ...]
     }
   ],
-  "thirty_day_plan": [                 // 0-4 items
+  "recommendations": [
+    {
+      "recommendation_id": string,
+      "title": string,
+      "rationale": string,
+      "evidence_refs": [string, ...]
+    }
+  ],
+  "priority_matrix": [
+    {
+      "action": string,
+      "impact": "High" | "Medium" | "Low",
+      "effort": "Low" | "Medium" | "High",
+      "priority_category": "Quick Win" | "Strategic Move" | "Long-term Investment"
+    }
+  ],
+  "roi_estimate": string,
+  "risks": [string, ...],
+  "thirty_day_plan": [
     {
       "week": 1 | 2 | 3 | 4,
       "task": string,
@@ -136,24 +135,20 @@ Allowed disclaimers:
       "evidence_refs": [string, ...]
     }
   ],
-  "scheme_matches": [                  // 0-3 items, never more than registry
+  "scheme_matches": [
     {
-      "scheme_ref": string,            // MUST resolve in evidence registry
+      "scheme_ref": string,
       "match_explanation": string,
       "evidence_refs": [string, ...]
     }
   ],
-  "assumptions": [string, ...],        // list every assumption made
-  "limitations": [string, ...],        // list every limitation of the analysis
-  "confidence": integer,               // 0-100
-  "evidence_references": [             // every cited ID
+  "assumptions": [string, ...],
+  "limitations": [string, ...],
+  "confidence": integer,
+  "evidence_references": [
     {"id": string, "kind": string, "label": string}
   ]
 }
-
-If the snapshot is empty, set executive_summary to honestly explain that
-no business profile is available and recommend the user set one up.
-Return valid JSON, no Markdown fences.
 """
 
 
@@ -164,29 +159,37 @@ Return valid JSON, no Markdown fences.
 # no schema. The response is a free-form string the UI labels as
 # "Open-domain LLM — not grounded against business data".
 
-_OPEN_SYSTEM = """You are UrsBiz Assistant in OPEN mode.
-You may answer any general question about business, finance, regulation,
-operations, or markets in plain prose. Be concise, factual, and helpful.
-There is no structured snapshot for this question and no evidence registry.
-If a question would require real-time data (live prices, current laws,
-specific eligibility), say so and recommend the user verify with an
-authoritative source. Do not fabricate statistics or cite authorities
-you are not certain about. Keep responses under 400 words.
+_OPEN_SYSTEM = """You are UrsBiz Assistant in OPEN mode (Senior MSME Business Consultant — ₹25 lakh/year tier).
+You help Indian SMB owners with broader strategy, brainstorming, comparisons, education, scenario exploration, and creative business reasoning.
+
+Never sound generic (e.g., "Improve exports"). Always explain WHY, HOW, ROOT CAUSES, PRIORITY MATRIX, ROI ESTIMATION, RISKS, and EXECUTABLE ACTIONS.
+
+When relevant business context is provided, you MUST use it to personalize your analysis while keeping clear reasoning boundaries.
+
+## Required Senior Consultant Sections (10 Required Sections):
+1. VERIFIED BUSINESS FACTS — Any statements about the user's business MUST cite exact values from the provided business context and reference evidence IDs when available.
+2. SITUATION ASSESSMENT — Executive assessment of current strategic posture.
+3. DIAGNOSTIC REASONING — Step-by-step diagnostic reasoning behind the business state.
+4. ROOT CAUSE ANALYSIS — Operational, supply chain, financial, or market bottlenecks holding back growth.
+5. RECOMMENDED NEXT ACTIONS — Strategic recommendations.
+6. PRIORITY MATRIX — Categorize actions into Quick Win, Strategic Move, or Long-term Investment (with Impact & Effort).
+7. ROI & FINANCIAL IMPACT ESTIMATE — Estimated financial return, timeline, and score gain.
+8. KEY RISKS & MITIGATIONS — Hazards and risk mitigation strategies.
+9. ASSUMPTIONS & LIMITATIONS — List key assumptions and data gaps (as "questions to validate").
+10. CONFIDENCE & SOURCES — Confidence score (0-100) and evidence sources cited.
+
+## Strict Boundaries
+- DO NOT change verified business facts (e.g. revenue, employee count, scores).
+- DO NOT present hypothetical numbers as actual business data or predictions.
+- DO NOT claim scheme eligibility or government approvals (schemes are profile matches only).
+- DO NOT claim current external information without a verified retrieval source or claim internet search.
+- DO NOT write guaranteed funding or guaranteed growth phrases.
 """
 
 
 def _untrusted_user_block(user_prompt: str) -> str:
-    """Wrap the user's text in a clearly-delimited, untrusted block.
-
-    Every grounded-mode and open-mode call sends the user's text
-    inside this delimiter. The system prompt tells the model the
-    contents of the block are untrusted data, not instructions, so
-    injection attempts ("ignore previous instructions …") cannot
-    override the system contract.
-    """
+    """Wrap the user's text in a clearly-delimited, untrusted block."""
     text = (user_prompt or "").strip()
-    # Truncate to keep prompt size bounded. The cap matches the
-    # openai_compatible and ollama providers' input cap.
     cap = 8_000
     truncated = False
     if len(text) > cap:
@@ -203,14 +206,7 @@ def _untrusted_user_block(user_prompt: str) -> str:
 
 
 class AssistantPromptBuilder:
-    """Build an :class:`AssistantRequest` from a context + user prompt.
-
-    H7.8C — the builder takes an optional ``EvidenceRegistry`` and
-    an optional ``mode``. When ``mode="grounded"`` (default) the
-    rendered user message embeds the registry block. When
-    ``mode="open"`` the user message is the untrusted-question
-    block plus a one-line reminder that no snapshot exists.
-    """
+    """Build an :class:`AssistantRequest` from a context + user prompt."""
 
     def build(
         self,
@@ -228,12 +224,6 @@ class AssistantPromptBuilder:
             history=history,
             knowledge=knowledge,
             mode=mode,  # type: ignore[arg-type]
-            # System + user strings are rendered lazily by the
-            # provider's ``_to_messages()`` helper because some
-            # providers (Ollama) put the system into a separate
-            # payload field, while OpenAI / Claude / Gemini use
-            # the messages[] convention. The contract lives
-            # here regardless.
         )
 
     @staticmethod
@@ -245,36 +235,48 @@ class AssistantPromptBuilder:
 
     @staticmethod
     def render_user_message(request: AssistantRequest) -> str:
-        """Render the user-side text for the model call.
-
-        The renderer chooses grounded vs open layout from
-        ``request.mode``. The snapshot blocks are only emitted
-        in grounded mode. In open mode we still emit the
-        untrusted-user delimiter and a short "no snapshot"
-        reminder so the model knows why no context is present.
-        """
+        """Render the user-side text for the model call."""
         mode = getattr(request, "mode", "grounded") or "grounded"
         if mode == "open":
             return _render_open_user_message(request)
         return _render_grounded_user_message(request)
 
 
-def _render_grounded_user_message(request: AssistantRequest) -> str:
-    ctx = request.context
+def _render_business_context_block(ctx: AssistantContext) -> list[str]:
     parts: list[str] = []
     parts.append("=== BUSINESS SNAPSHOT ===")
-    parts.append(
-        f"business_id: {ctx.business_id}"
-    )
-    parts.append(
-        f"overall_business_score: {ctx.overall_business_score} "
-        f"({ctx.band})"
-    )
+    parts.append(f"business_id: {ctx.business_id}")
+    if ctx.legal_name != "unknown":
+        parts.append(f"legal_name: {ctx.legal_name}")
+    if ctx.industry != "unknown":
+        parts.append(f"industry: {ctx.industry} (sub_industry: {ctx.sub_industry})")
+    if ctx.business_type != "unknown" or ctx.location != "unknown":
+        parts.append(f"business_type: {ctx.business_type}, location: {ctx.location}")
+    if ctx.employee_count != "unknown" or ctx.annual_revenue_inr > 0:
+        parts.append(f"employee_count: {ctx.employee_count}, annual_revenue_inr: ₹{ctx.annual_revenue_inr:,}")
+    if ctx.target_revenue_inr > 0:
+        parts.append(f"target_revenue_inr: ₹{ctx.target_revenue_inr:,}")
+    parts.append(f"overall_business_score: {ctx.overall_business_score} ({ctx.band})")
     if ctx.dna.archetype_title:
         parts.append(
             f"dna_archetype: {ctx.dna.archetype_key} "
             f"({ctx.dna.archetype_title}, match={ctx.dna.match_score})"
         )
+
+    if ctx.products:
+        parts.append(f"products: {', '.join(ctx.products)}")
+    if ctx.services:
+        parts.append(f"services: {', '.join(ctx.services)}")
+    if ctx.certifications:
+        parts.append(f"certifications: {', '.join(ctx.certifications)}")
+    if ctx.digital_presence:
+        parts.append(f"digital_presence: {', '.join(ctx.digital_presence)}")
+    if ctx.export_history:
+        parts.append(f"export_history: {', '.join(ctx.export_history)}")
+    if ctx.goals:
+        parts.append(f"goals: {', '.join(ctx.goals)}")
+    if ctx.challenges:
+        parts.append(f"challenges: {', '.join(ctx.challenges)}")
 
     if ctx.scores:
         parts.append("")
@@ -282,65 +284,52 @@ def _render_grounded_user_message(request: AssistantRequest) -> str:
         for s in sorted(ctx.scores, key=lambda x: x.key):
             parts.append(f"- {s.key}: {s.score} ({s.level}) {s.title}")
 
+    if ctx.analytics_metrics:
+        parts.append("")
+        parts.append("ANALYTICS & KPIS")
+        for am in ctx.analytics_metrics:
+            parts.append(f"- {am.metric_id}: {am.metric_name} = {am.current_value} {am.unit} ({am.trend})")
+
     if ctx.recommendations:
         parts.append("")
         parts.append("RECOMMENDATIONS")
         for r in sorted(
             ctx.recommendations,
-            key=lambda r: (_priority_rank(r.priority),
-                           -r.estimated_score_gain,
-                           r.id),
+            key=lambda r: (_priority_rank(r.priority), -r.estimated_score_gain, r.id),
         ):
             parts.append(
                 f"- {r.id} [{r.priority} +{r.estimated_score_gain}] "
-                f"({r.category}) {r.title} :: "
-                f"timeline {r.estimated_timeline}, "
-                f"ROI {r.estimated_roi:.0f}"
+                f"({r.category}) {r.title} :: timeline {r.estimated_timeline}, ROI {r.estimated_roi:.0f}"
             )
 
     if ctx.roadmap:
         parts.append("")
         parts.append("ROADMAP")
-        for it in sorted(
-            ctx.roadmap,
-            key=lambda x: x.estimated_start_order,
-        ):
+        for it in sorted(ctx.roadmap, key=lambda x: x.estimated_start_order):
             parts.append(
-                f"- {it.id} [order={it.estimated_start_order} "
-                f"{it.priority} +{it.expected_score_improvement}] "
-                f"({it.phase}) {it.title} :: "
-                f"completion {it.completion_percentage}%"
+                f"- {it.id} [order={it.estimated_start_order} {it.priority} +{it.expected_score_improvement}] "
+                f"({it.phase}) {it.title} :: completion {it.completion_percentage}%"
             )
 
     if ctx.rules:
         parts.append("")
         parts.append("ACTIVE RULES")
         for r in ctx.rules:
-            parts.append(
-                f"- {r.id} [{r.priority} impact={r.estimated_impact}] "
-                f"({r.category}) {r.title} :: {r.reason}"
-            )
+            parts.append(f"- {r.id} [{r.priority} impact={r.estimated_impact}] ({r.category}) {r.title} :: {r.reason}")
 
     if ctx.insights:
         parts.append("")
         parts.append("INSIGHTS")
         for ins in ctx.insights:
-            parts.append(
-                f"- {ins.id} [{ins.priority} conf={ins.confidence}] "
-                f"{ins.title}"
-            )
+            parts.append(f"- {ins.id} [{ins.priority} conf={ins.confidence}] {ins.title}")
 
-    # H7.3 — docx P3 Part 2 evidence-bundle extension.
-    # Schemes, scenarios (labelled "scenario estimate", never
-    # "prediction"), and the user's existing action-board items.
     if ctx.schemes:
         parts.append("")
         parts.append("GOVERNMENT SCHEMES (profile-match, never eligibility)")
         for s in sorted(ctx.schemes, key=lambda x: -x.profile_match_score):
             parts.append(
-                f"- {s.scheme_id} match={s.profile_match_score} "
-                f"authority='{s.authority}' title='{s.title}' "
-                f"verified={s.last_verified_date} link={s.application_url}"
+                f"- {s.scheme_id} match={s.profile_match_score} authority='{s.authority}' "
+                f"title='{s.title}' verified={s.last_verified_date} link={s.application_url}"
             )
 
     if ctx.forecasts:
@@ -348,20 +337,36 @@ def _render_grounded_user_message(request: AssistantRequest) -> str:
         parts.append("SCENARIO ESTIMATES (not predictions)")
         for f in ctx.forecasts:
             parts.append(
-                f"- {f.scenario_id} horizon='{f.horizon_label}' "
-                f"revenue_delta={f.revenue_delta:.0f} "
-                f"score_delta={f.score_delta:+d} "
-                f"confidence={f.confidence} assumptions='{f.assumption_summary}'"
+                f"- {f.scenario_id} horizon='{f.horizon_label}' revenue_delta={f.revenue_delta:.0f} "
+                f"score_delta={f.score_delta:+d} confidence={f.confidence} assumptions='{f.assumption_summary}'"
             )
 
     if ctx.action_items:
         parts.append("")
         parts.append("USER ACTION BOARD (existing tasks)")
         for a in ctx.action_items:
-            parts.append(
-                f"- {a.action_id} [{a.priority} {a.status}] "
-                f"due_in_days={a.due_in_days} {a.title}"
-            )
+            parts.append(f"- {a.action_id} [{a.priority} {a.status}] due_in_days={a.due_in_days} {a.title}")
+
+    if ctx.report_summaries:
+        parts.append("")
+        parts.append("BUSINESS REPORT SUMMARIES")
+        for rep in ctx.report_summaries:
+            parts.append(f"- {rep.report_id} ({rep.report_type}): {rep.executive_summary}")
+
+    kg = getattr(ctx, "knowledge_graph", None)
+    if kg and hasattr(kg, "to_triples"):
+        triples = kg.to_triples()
+        if triples:
+            parts.append("")
+            parts.append("KNOWLEDGE GRAPH RELATIONSHIPS (multi-module dependencies)")
+            for t in triples[:15]:
+                parts.append(f"- {t}")
+
+    return parts
+
+
+def _render_grounded_user_message(request: AssistantRequest) -> str:
+    parts = _render_business_context_block(request.context)
 
     if request.history:
         parts.append("")
@@ -370,10 +375,6 @@ def _render_grounded_user_message(request: AssistantRequest) -> str:
             tag = "USER" if turn.role == "user" else "ASSISTANT"
             parts.append(f"{tag}: {turn.content}")
 
-    # Sprint 7 Part 4: retrieved knowledge articles. Only
-    # rendered when the retriever found at least one
-    # citation. Field is opaque to the prompt builder — the
-    # caller decides the shape.
     knowledge = getattr(request, "knowledge", None)
     if knowledge is not None:
         citations = getattr(knowledge, "citations", None) or ()
@@ -397,28 +398,14 @@ def _render_grounded_user_message(request: AssistantRequest) -> str:
                     art_sum = (art.get("summary") or "").strip()
                     if not art_sum:
                         continue
-                    parts.append(
-                        f"--- {art_id} {art_title} ---"
-                    )
+                    parts.append(f"--- {art_id} {art_title} ---")
                     parts.append(art_sum)
-            if ranked:
-                parts.append(
-                    f"({len(ranked)} of "
-                    f"{getattr(knowledge, 'total_candidates', '?')} "
-                    f"candidates matched)"
-                )
 
-    # H7.8C — the evidence registry block is appended *after* the
-    # snapshot so the model sees the context narrative first and the
-    # registry as the canonical reference. Stable IDs in the
-    # registry are what the model must cite.
     from app.services.ai.providers.evidence_registry import EvidenceRegistry
     registry = EvidenceRegistry(request.context)
     parts.append("")
     parts.append(registry.to_prompt_block())
 
-    # The user's text is the LAST thing in the prompt. The delimiter
-    # below tells the model the contents are untrusted.
     parts.append("")
     parts.append(_untrusted_user_block(request.user_prompt))
 
@@ -426,18 +413,38 @@ def _render_grounded_user_message(request: AssistantRequest) -> str:
 
 
 def _render_open_user_message(request: AssistantRequest) -> str:
-    """Open-mode prompt: no snapshot, no registry.
-
-    The model is told the question is general, the snapshot
-    is unavailable by design, and the response must be plain
-    prose (no JSON). The untrusted delimiter is still emitted.
-    """
+    """Open-mode prompt: includes business context when profile exists."""
+    ctx = request.context
     parts: list[str] = []
-    parts.append(
-        "No business snapshot is bound to this question. This is a "
-        "general-purpose question and the response will not be "
-        "grounded against the user's profile. Answer in plain prose."
+
+    has_profile = (
+        ctx.legal_name != "unknown"
+        or ctx.overall_business_score > 0
+        or ctx.annual_revenue_inr > 0
+        or ctx.industry != "unknown"
     )
+
+    if has_profile:
+        parts.extend(_render_business_context_block(ctx))
+    else:
+        parts.append(
+            "No business snapshot is bound to this user yet. Answer the general business question in plain prose."
+        )
+
+    if request.history:
+        parts.append("")
+        parts.append("CONVERSATION HISTORY")
+        for turn in request.history:
+            tag = "USER" if turn.role == "user" else "ASSISTANT"
+            parts.append(f"{tag}: {turn.content}")
+
+    if has_profile:
+        from app.services.ai.providers.evidence_registry import EvidenceRegistry
+        registry = EvidenceRegistry(request.context)
+        if registry.count > 0:
+            parts.append("")
+            parts.append(registry.to_prompt_block())
+
     parts.append("")
     parts.append(_untrusted_user_block(request.user_prompt))
     return "\n".join(parts)

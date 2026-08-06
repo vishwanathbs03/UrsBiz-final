@@ -197,7 +197,7 @@ class ConversationService:
 
         # 2. Compose rolling history. Use every existing
         #    message *before* the user message we just added.
-        history = self._build_history(session)
+        history = self._build_history(session, exclude_message_id=user_msg.id)
 
         # 3. Build the assistant context via Part 2.
         context = self._assistant.build_context(owner_id=owner_id)
@@ -296,13 +296,32 @@ class ConversationService:
     # ---- internals --------------------------------------------------- #
 
     def _build_history(
-        self, session
+        self,
+        session,
+        *,
+        exclude_message_id: int | None = None,
     ) -> tuple[AssistantTurn, ...]:
-        """Return the last N turns as AssistantTurn records."""
+        """Return the last N turns as AssistantTurn records.
+
+        ``exclude_message_id`` is the id of the user message
+        that was just appended. We must skip it because the
+        provider is about to receive it as the live ``user_prompt``
+        — repassing it as history would echo the same text back
+        into the model and inflate the prompt with duplicate
+        content. (H7.8C P3 — the previous filter compared
+        ``m.id`` to ``session.id`` which almost never matched,
+        so the just-inserted user message leaked into the
+        rolling context.)
+        """
         messages = self._repo.get_messages(session=session)
         # Exclude the message we just added (it's the user
         # message we're about to send as the prompt).
-        prior = [m for m in messages if m.id != session.id and m.role in ("user", "assistant")]
+        prior = [
+            m
+            for m in messages
+            if m.role in ("user", "assistant")
+            and (exclude_message_id is None or m.id != exclude_message_id)
+        ]
         if self._rolling_context_turns <= 0:
             return ()
         prior = prior[-self._rolling_context_turns:]

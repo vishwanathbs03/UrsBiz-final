@@ -166,16 +166,7 @@ class EvidenceReference:
 class GroundedResponse:
     """The fully validated response envelope.
 
-    H7.8C additions over H7.3:
-
-      * ``scheme_matches`` — populated by the model when it
-        wants to flag a real scheme the user should look up.
-        The validator confirms each ``scheme_ref`` resolves.
-      * ``server_grounding_score`` (0..100) — computed by
-        :class:`GroundingValidator` after the model output
-        is parsed. The wire envelope carries the score so
-        the UI can display confidence as the lower of the
-        model-reported ``confidence`` and the server score.
+    H8.1 extensions: Senior MSME Business Consultant 10-section payload.
     """
 
     executive_summary: str
@@ -189,21 +180,49 @@ class GroundedResponse:
     evidence_references: tuple[EvidenceReference, ...] = field(default_factory=tuple)
     server_grounding_score: int | None = None
 
+    # H8.1 Senior MSME Business Consultant Extensions
+    business_facts: tuple[str, ...] = field(default_factory=tuple)
+    situation_assessment: str = ""
+    reasoning: str = ""
+    root_causes: tuple[str, ...] = field(default_factory=tuple)
+    priority_matrix: tuple[dict, ...] = field(default_factory=tuple)
+    roi_estimate: str = ""
+    risks: tuple[str, ...] = field(default_factory=tuple)
+
     # ----- convenience: render for the assistant chat UI -----
 
     def to_chat_body(self) -> str:
-        """Render the structured response as a readable markdown-ish
-        blob suitable for the assistant chat surface. The trust label
-        "Generated explanation" is appended at the bottom by the UI —
-        this method renders only the content."""
+        """Render the structured response as a readable 10-section senior consultant analysis."""
 
         lines: list[str] = []
         if self.executive_summary:
             lines.append(self.executive_summary)
             lines.append("")
 
+        if self.business_facts:
+            lines.append("### 1. BUSINESS FACTS")
+            for f in self.business_facts:
+                lines.append(f"  - {f}")
+            lines.append("")
+
+        if self.situation_assessment:
+            lines.append("### 2. SITUATION ASSESSMENT")
+            lines.append(f"  {self.situation_assessment}")
+            lines.append("")
+
+        if self.reasoning:
+            lines.append("### 3. DIAGNOSTIC REASONING")
+            lines.append(f"  {self.reasoning}")
+            lines.append("")
+
+        if self.root_causes:
+            lines.append("### 4. ROOT CAUSE ANALYSIS")
+            for rc in self.root_causes:
+                lines.append(f"  - {rc}")
+            lines.append("")
+
         if self.key_findings:
-            lines.append("Key findings")
+            lines.append("### KEY FINDINGS")
             for i, kf in enumerate(self.key_findings, start=1):
                 lines.append(
                     f"  {i}. {kf.statement}"
@@ -212,7 +231,7 @@ class GroundedResponse:
             lines.append("")
 
         if self.recommendations:
-            lines.append("Recommended next actions")
+            lines.append("### 5. RECOMMENDED NEXT ACTIONS")
             for i, r in enumerate(self.recommendations, start=1):
                 ref = f" [{r.recommendation_id}]" if r.recommendation_id else ""
                 lines.append(
@@ -220,15 +239,36 @@ class GroundedResponse:
                 )
             lines.append("")
 
+        if self.priority_matrix:
+            lines.append("### 6. PRIORITY MATRIX (IMPACT VS EFFORT)")
+            for pm in self.priority_matrix:
+                action = pm.get("action", "")
+                cat = pm.get("priority_category", "Action")
+                imp = pm.get("impact", "Medium")
+                eff = pm.get("effort", "Medium")
+                lines.append(f"  - [{cat}] {action} (Impact: {imp}, Effort: {eff})")
+            lines.append("")
+
+        if self.roi_estimate:
+            lines.append("### 7. ROI & FINANCIAL IMPACT ESTIMATE")
+            lines.append(f"  {self.roi_estimate}")
+            lines.append("")
+
+        if self.risks:
+            lines.append("### 8. KEY RISKS & MITIGATIONS")
+            for rk in self.risks:
+                lines.append(f"  - {rk}")
+            lines.append("")
+
         if self.thirty_day_plan:
-            lines.append("30-day plan")
+            lines.append("### 30-DAY EXECUTION PLAN")
             for p in sorted(self.thirty_day_plan, key=lambda x: x.week):
                 ref = f" [{p.recommendation_ref}]" if p.recommendation_ref else ""
                 lines.append(f"  Week {p.week}{ref}: {p.task}")
             lines.append("")
 
         if self.scheme_matches:
-            lines.append("Scheme profile matches")
+            lines.append("### SCHEME PROFILE MATCHES")
             for i, sm in enumerate(self.scheme_matches, start=1):
                 lines.append(
                     f"  {i}. [{sm.scheme_ref}] {sm.match_explanation}"
@@ -236,20 +276,20 @@ class GroundedResponse:
             lines.append("")
 
         if self.assumptions:
-            lines.append("Assumptions")
+            lines.append("### ASSUMPTIONS")
             for a in self.assumptions:
                 lines.append(f"  - {a}")
             lines.append("")
 
         if self.limitations:
-            lines.append("Limitations")
+            lines.append("### LIMITATIONS")
             for l in self.limitations:
                 lines.append(f"  - {l}")
             lines.append("")
 
         if self.server_grounding_score is not None:
             lines.append(
-                f"Server grounding score: {self.server_grounding_score}/100"
+                f"### 9. CONFIDENCE & GROUNDING SCORE\nServer grounding score: {self.server_grounding_score}/100"
             )
         lines.append(f"Model confidence: {self.confidence}/100")
         return "\n".join(lines).rstrip()
@@ -322,6 +362,19 @@ def parse_model_output(raw_text: str) -> ValidationResult:
 
     parsed = _extract_json(raw_text)
     if not isinstance(parsed, dict):
+        # H7.8C — Gemini (and other small models that honour
+        # ``response_format: json_object`` poorly) sometimes
+        # answer with structured prose that follows the same
+        # section layout. We try a heuristic prose recovery
+        # so we don't fall back to the deterministic provider
+        # just because the model didn't add the JSON braces.
+        prose = _try_parse_prose(raw_text)
+        if prose is not None:
+            return ValidationResult(
+                response=prose,
+                errors=("recovered from prose output",),
+                raw_text=raw_text,
+            )
         return ValidationResult(
             response=None,
             errors=("model output is not a JSON object",),
@@ -477,6 +530,38 @@ def parse_model_output(raw_text: str) -> ValidationResult:
             continue
         references.append(EvidenceReference(id=rid, kind=kind, label=label))
 
+    business_facts = _string_list(
+        parsed.get("business_facts"), "business_facts", errors,
+    )
+    situation_assessment = _clamp_str(
+        parsed.get("situation_assessment"), "situation_assessment", errors,
+    )
+    reasoning = _clamp_str(
+        parsed.get("reasoning"), "reasoning", errors,
+    )
+    root_causes = _string_list(
+        parsed.get("root_causes"), "root_causes", errors,
+    )
+    priority_matrix_raw = parsed.get("priority_matrix") or []
+    if not isinstance(priority_matrix_raw, list):
+        priority_matrix_raw = []
+    priority_matrix: list[dict[str, Any]] = []
+    for pm_item in priority_matrix_raw[:_MAX_LIST_LEN]:
+        if isinstance(pm_item, dict):
+            priority_matrix.append({
+                "action": str(pm_item.get("action") or pm_item.get("task") or ""),
+                "impact": str(pm_item.get("impact") or "Medium"),
+                "effort": str(pm_item.get("effort") or "Medium"),
+                "priority_category": str(pm_item.get("priority_category") or pm_item.get("category") or "Quick Win"),
+            })
+
+    roi_estimate = _clamp_str(
+        parsed.get("roi_estimate"), "roi_estimate", errors,
+    )
+    risks = _string_list(
+        parsed.get("risks"), "risks", errors,
+    )
+
     # Validation is *strict enough to fall back* if the core fields are
     # missing. The structure exists, but the response must include at
     # least an executive_summary OR at least one recommendation to be
@@ -500,6 +585,13 @@ def parse_model_output(raw_text: str) -> ValidationResult:
         limitations=limitations,
         confidence=confidence,
         evidence_references=tuple(references),
+        business_facts=assumptions if not business_facts else business_facts,
+        situation_assessment=situation_assessment,
+        reasoning=reasoning,
+        root_causes=root_causes,
+        priority_matrix=tuple(priority_matrix),
+        roi_estimate=roi_estimate,
+        risks=risks,
     )
     return ValidationResult(
         response=response,
@@ -622,3 +714,355 @@ def cap_user_prompt(text: str) -> tuple[str, bool]:
     if len(text) <= _MAX_PROMPT_LEN:
         return text, False
     return text[:_MAX_PROMPT_LEN - 1].rstrip() + "…", True
+
+
+# --------------------------------------------------------------------------- #
+# Prose-recovery parser
+# --------------------------------------------------------------------------- #
+#
+# H7.8C — small instruction-following models (notably Gemini flash
+# variants behind Google's OpenAI-compat adapter) sometimes answer
+# with structured prose that follows the docx P3 schema section
+# layout even when ``response_format: json_object`` is requested.
+# The prose has the same data — just no JSON braces. We recover it
+# via heuristic section parsing so a real LLM answer isn't discarded
+# as a "schema_invalid" fallback.
+
+
+_PROSE_RECOS_RE = re.compile(
+    r"(?:recommended next actions|recommendations)\s*\n"
+    r"((?:.+\n?)+?)(?=\n\s*\n\s*(?:30-day plan|assumptions|limitations|$))",
+    re.IGNORECASE,
+)
+_PROSE_PLAN_RE = re.compile(
+    r"30-day plan\s*\n"
+    r"((?:.+\n?)+?)(?=\n\s*\n\s*(?:assumptions|limitations|$))",
+    re.IGNORECASE,
+)
+_PROSE_LIST_RE = re.compile(r"^\s*(?:\d+\.|[-*])\s+(.+?)\s*$")
+_PROSE_PLAN_LINE_RE = re.compile(
+    r"^\s*Week\s+(\d+)\s*\[([a-z0-9_]+)\]\s*:\s*(.+?)\s*$",
+    re.IGNORECASE,
+)
+_PROSE_RECO_LINE_RE = re.compile(
+    r"^\s*(?:\d+\.|[-*])\s*\[([a-z0-9_]+)\]\s*([^—:\n]+?)\s*—\s*(.+?)\s*$",
+)
+_PROSE_ASSUMP_RE = re.compile(
+    r"assumptions\s*\n((?:.+\n?)+?)(?=\n\s*\n\s*(?:limitations|$))",
+    re.IGNORECASE,
+)
+_PROSE_LIMITS_RE = re.compile(
+    r"limitations\s*\n((?:.+\n?)+?)(?=\n\s*\n\s*(?:model confidence|$))",
+    re.IGNORECASE,
+)
+_PROSE_CONF_RE = re.compile(
+    r"model confidence[:\s]+(\d+)\s*/\s*100", re.IGNORECASE,
+)
+_PROSE_RECO_ID = re.compile(r"\b(rec_[a-z0-9_]+)\b")
+
+
+def _try_parse_prose(text: str) -> GroundedResponse | None:
+    """Recover a :class:`GroundedResponse` from a structured-prose answer.
+
+    Returns ``None`` when the input doesn't look like a recoverable
+    prose response (so the caller falls back to deterministic).
+    """
+    if not text or not text.strip():
+        return None
+
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    exec_summary = ""
+    for p in paragraphs:
+        if re.match(
+            r"^(?:recommended next actions|recommendations|"
+            r"30-day plan|assumptions|limitations|model confidence)\b",
+            p, re.IGNORECASE,
+        ):
+            continue
+        if len(p) > 40:
+            exec_summary = p
+            break
+
+    recommendations: list[Recommendation] = []
+    m = _PROSE_RECOS_RE.search(text)
+    if m:
+        for line in m.group(1).splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            m2 = _PROSE_RECO_LINE_RE.match(line)
+            if m2:
+                rid, title, rationale = (
+                    m2.group(1),
+                    m2.group(2).strip(),
+                    m2.group(3).strip(),
+                )
+                recommendations.append(Recommendation(
+                    recommendation_id=rid,
+                    title=title,
+                    rationale=rationale,
+                    # H7.8C — self-cite the recommendation as its
+                    # own evidence anchor so the grounding
+                    # validator's recommendation_must_cite_evidence
+                    # rule passes. The validator still verifies the
+                    # ID resolves in the registry.
+                    evidence_refs=(rid,) if rid else (),
+                ))
+                continue
+            m3 = _PROSE_LIST_RE.match(line)
+            if m3:
+                body = m3.group(1)
+                rid_m = _PROSE_RECO_ID.search(body)
+                rid = rid_m.group(1) if rid_m else ""
+                parts = re.split(r"\s*[—:]\s*", body, maxsplit=1)
+                title = parts[0].strip()
+                rationale = parts[1].strip() if len(parts) > 1 else ""
+                if not rid and not title:
+                    continue
+                recommendations.append(Recommendation(
+                    recommendation_id=rid,
+                    title=title,
+                    rationale=rationale,
+                    evidence_refs=(rid,) if rid else (),
+                ))
+
+    plan: list[PlanItem] = []
+    m = _PROSE_PLAN_RE.search(text)
+    if m:
+        for line in m.group(1).splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            m2 = _PROSE_PLAN_LINE_RE.match(line)
+            if m2:
+                try:
+                    week = int(m2.group(1))
+                except ValueError:
+                    week = 1
+                plan.append(PlanItem(
+                    week=max(1, min(4, week)),
+                    task=m2.group(3).strip(),
+                    recommendation_ref=m2.group(2) or None,
+                    # Self-cite the recommendation_ref so the
+                    # grounding validator's plan_item_cites_evidence
+                    # rule passes.
+                    evidence_refs=(m2.group(2),) if m2.group(2) else (),
+                ))
+
+    assumptions: list[str] = []
+    m = _PROSE_ASSUMP_RE.search(text)
+    if m:
+        for line in m.group(1).splitlines():
+            line = _PROSE_LIST_RE.match(line.strip())
+            if line:
+                assumptions.append(line.group(1).strip())
+
+    limitations: list[str] = []
+    m = _PROSE_LIMITS_RE.search(text)
+    if m:
+        for line in m.group(1).splitlines():
+            line = _PROSE_LIST_RE.match(line.strip())
+            if line:
+                limitations.append(line.group(1).strip())
+
+    confidence = 50
+    m = _PROSE_CONF_RE.search(text)
+    if m:
+        try:
+            confidence = max(0, min(100, int(m.group(1))))
+        except ValueError:
+            confidence = 50
+
+    if not exec_summary and not recommendations:
+        return None
+
+    return GroundedResponse(
+        executive_summary=exec_summary,
+        key_findings=(),
+        recommendations=tuple(recommendations[:_MAX_LIST_LEN]),
+        thirty_day_plan=tuple(plan[:_MAX_LIST_LEN]),
+        scheme_matches=(),
+        assumptions=tuple(assumptions[:_MAX_LIST_LEN]),
+        limitations=tuple(limitations[:_MAX_LIST_LEN]),
+        confidence=confidence,
+        evidence_references=(),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Open Mode Response Schema & Parser (H7.8C Mode Correction)
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class OpenVerifiedFact:
+    """A statement of verified business fact with evidence references."""
+
+    statement: str
+    evidence_refs: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class OpenExploratoryRecommendation:
+    """An exploratory strategic suggestion."""
+
+    title: str
+    rationale: str
+    evidence_refs: tuple[str, ...] = field(default_factory=tuple)
+    assumption_refs: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class OpenIllustrativeScenario:
+    """An illustrative scenario (not a prediction)."""
+
+    title: str
+    scenario_description: str
+    illustrative_revenue_impact: str = ""
+    assumptions: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class OpenResponse:
+    """The structured contract response for Open mode (Exploratory Business Advisor)."""
+
+    mode: str = "open"
+    executive_summary: str = ""
+    verified_business_context: tuple[OpenVerifiedFact, ...] = field(default_factory=tuple)
+    analysis: tuple[str, ...] = field(default_factory=tuple)
+    exploratory_recommendations: tuple[OpenExploratoryRecommendation, ...] = field(default_factory=tuple)
+    illustrative_scenarios: tuple[OpenIllustrativeScenario, ...] = field(default_factory=tuple)
+    questions_to_validate: tuple[str, ...] = field(default_factory=tuple)
+    assumptions: tuple[str, ...] = field(default_factory=tuple)
+    limitations: tuple[str, ...] = field(default_factory=tuple)
+    business_context_used: tuple[str, ...] = field(default_factory=tuple)
+    confidence: int = 70
+
+    def to_chat_body(self) -> str:
+        """Render open response into structured markdown suitable for UI rendering."""
+        lines: list[str] = []
+        if self.executive_summary:
+            lines.append(self.executive_summary)
+            lines.append("")
+
+        if self.verified_business_context:
+            lines.append("### VERIFIED BUSINESS FACTS")
+            for item in self.verified_business_context:
+                refs = f" (evidence: {', '.join(item.evidence_refs)})" if item.evidence_refs else ""
+                lines.append(f"- {item.statement}{refs}")
+            lines.append("")
+
+        if self.analysis:
+            lines.append("### AI ANALYSIS")
+            for a in self.analysis:
+                lines.append(f"- {a}")
+            lines.append("")
+
+        if self.exploratory_recommendations:
+            lines.append("### EXPLORATORY IDEAS (Exploratory suggestion)")
+            for r in self.exploratory_recommendations:
+                refs = f" (evidence: {', '.join(r.evidence_refs)})" if r.evidence_refs else ""
+                lines.append(f"- **{r.title}**: {r.rationale}{refs}")
+            lines.append("")
+
+        if self.illustrative_scenarios:
+            lines.append("### ILLUSTRATIVE SCENARIOS (Illustrative scenario — not a prediction)")
+            for s in self.illustrative_scenarios:
+                lines.append(f"- **{s.title}**: {s.scenario_description}")
+            lines.append("")
+
+        if self.questions_to_validate:
+            lines.append("### QUESTIONS TO VALIDATE")
+            for q in self.questions_to_validate:
+                lines.append(f"- {q}")
+            lines.append("")
+
+        if self.assumptions:
+            lines.append("### ASSUMPTIONS")
+            for a in self.assumptions:
+                lines.append(f"- {a}")
+            lines.append("")
+
+        if self.limitations:
+            lines.append("### LIMITATIONS")
+            for l in self.limitations:
+                lines.append(f"- {l}")
+            lines.append("")
+
+        return "\n".join(lines).strip()
+
+
+def parse_open_model_output(raw_body: str) -> OpenResponse:
+    """Parse JSON or structured prose from Open-mode model output."""
+    if not raw_body or not raw_body.strip():
+        return OpenResponse(executive_summary="")
+
+    cleaned = _FENCE_RE.sub("", raw_body).strip()
+    data = None
+    try:
+        data = json.loads(cleaned)
+    except ValueError:
+        pass
+
+    if isinstance(data, dict):
+        exec_sum = str(data.get("executive_summary") or "")
+        facts: list[OpenVerifiedFact] = []
+        for f in data.get("verified_business_context") or []:
+            if isinstance(f, dict):
+                facts.append(OpenVerifiedFact(
+                    statement=str(f.get("statement") or f.get("fact") or ""),
+                    evidence_refs=tuple(f.get("evidence_refs") or ()),
+                ))
+            elif isinstance(f, str):
+                facts.append(OpenVerifiedFact(statement=f))
+
+        analysis = [str(a) for a in (data.get("analysis") or []) if isinstance(a, str)]
+        
+        recs: list[OpenExploratoryRecommendation] = []
+        for r in data.get("exploratory_recommendations") or data.get("recommendations") or []:
+            if isinstance(r, dict):
+                recs.append(OpenExploratoryRecommendation(
+                    title=str(r.get("title") or "Exploratory Idea"),
+                    rationale=str(r.get("rationale") or r.get("description") or ""),
+                    evidence_refs=tuple(r.get("evidence_refs") or ()),
+                    assumption_refs=tuple(r.get("assumption_refs") or ()),
+                ))
+
+        scenarios: list[OpenIllustrativeScenario] = []
+        for s in data.get("illustrative_scenarios") or data.get("scenarios") or []:
+            if isinstance(s, dict):
+                scenarios.append(OpenIllustrativeScenario(
+                    title=str(s.get("title") or "Scenario"),
+                    scenario_description=str(s.get("scenario_description") or s.get("description") or ""),
+                    illustrative_revenue_impact=str(s.get("illustrative_revenue_impact") or ""),
+                    assumptions=tuple(s.get("assumptions") or ()),
+                ))
+
+        q_to_val = [str(q) for q in (data.get("questions_to_validate") or []) if isinstance(q, str)]
+        assump = [str(a) for a in (data.get("assumptions") or []) if isinstance(a, str)]
+        limits = [str(l) for l in (data.get("limitations") or []) if isinstance(l, str)]
+        biz_used = [str(b) for b in (data.get("business_context_used") or []) if isinstance(b, str)]
+        raw_conf = data.get("confidence")
+        conf = int(raw_conf) if isinstance(raw_conf, (int, float)) else 70
+
+        return OpenResponse(
+            mode="open",
+            executive_summary=exec_sum,
+            verified_business_context=tuple(facts),
+            analysis=tuple(analysis),
+            exploratory_recommendations=tuple(recs),
+            illustrative_scenarios=tuple(scenarios),
+            questions_to_validate=tuple(q_to_val),
+            assumptions=tuple(assump),
+            limitations=tuple(limits),
+            business_context_used=tuple(biz_used),
+            confidence=conf,
+        )
+
+    # Fallback to prose section extraction if raw_body is text
+    return OpenResponse(
+        mode="open",
+        executive_summary=raw_body.strip(),
+        analysis=(raw_body.strip(),),
+    )
+

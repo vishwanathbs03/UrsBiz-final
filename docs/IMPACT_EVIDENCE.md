@@ -69,7 +69,7 @@ with a fresh bearer token issued by `/api/v1/auth/login`:
 | Predictions (risk) | `/api/v1/business/predictions/risk` | 200 | 240 | Risk summary keyed off challenges |
 | Advisor | `/api/v1/advisor` | 200 | 6,823 | Multi-paragraph advisory text |
 | Recommendations | `/api/v1/business/recommendations` | 200 | 4,110 | Tied to the seeded challenges |
-| Schemes | `/api/v1/business/schemes` | 200 | 17,037 | 14+ matched MSME / NSIC / TUF / ZED schemes |
+| Schemes | `/api/v1/business/schemes` | 200 | 17,037 | 7 curated scheme and registration programs matched (CGTMSE, ZED, PMEGP, MAI, MUDRA Shishu, NSIC, Udyam) |
 | Action board | `/api/v1/action-board` | 200 | 1,014 | 4 demo items rendered |
 | Reports (CSV) | `/api/v1/reports/csv` | 200 | 3,085 | Profile + products + certifications rowset |
 | Reports (PDF) | `/api/v1/reports/pdf` | 200 | 4,650 | Multi-section PDF snapshot |

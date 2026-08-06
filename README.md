@@ -1,6 +1,6 @@
 # UrsBiz — Deterministic Business Intelligence for Indian MSMEs
 
-**One-sentence value proposition:** UrsBiz gives a micro- or small-business owner a stored business profile, a deterministic 0–100 Health Score, profile-matched government schemes with cited sources, and bank-ready PDF/CSV reports — every number reproducible from the profile.
+**One-sentence value proposition:** UrsBiz gives a micro- or small-business owner a stored business profile, a deterministic 0–100 Profile Readiness Score, profile-matched government schemes with cited sources, and bank-ready PDF/CSV reports — every number reproducible from the profile.
 
 > **Live demo:** *(public URL pending deployment — see `docs/DEPLOYMENT_HACKATHON.md` and `H7_6_PUBLIC_DEPLOYMENT_REPORT.md` for the verified smoke-test path)*
 > **Demo credentials (seeded workspace):** `acme.textiles@example.com` / `AcmeDemoPass1` — Acme Textiles, Tirupur, Tamil Nadu (12 employees, ₹1.8 Cr → ₹3 Cr target)
@@ -45,8 +45,8 @@ Every outcome below is reproducible from the seeded demo workspace and is assert
 
 | # | Outcome | How to verify |
 |---|---------|---------------|
-| **1** | **Deterministic 0–100 Health Score** across four lenses (financial stability, operational risk, sales pipeline, compliance). Same inputs → same score, every run. | `GET /api/v1/business/scores` returns `healthScore` + 8 sub-scores for the demo workspace (see `H7_3_GROUNDED_GENERATIVE_AI_REPORT.md`). |
-| **2** | **Profile-matched schemes** with match %, source authority, last-verified date, and disclaimer per match. Catalog has 14+ verified entries across MSME / NSIC / TUF / ZED. | `GET /api/v1/business/schemes` returns the on-disk catalog matches. The catalog itself lives in versioned YAML/JSON, loaded into a knowledge base at startup. |
+| **1** | **Deterministic 0–100 Profile Readiness Score** — measures how completely the founder has filled in their business profile across six weighted sections (profile completeness, business info, products/services, team, financial, online presence). Same inputs → same score, every run. **It is not a measure of business health or risk;** it tells you how complete the digital twin is. | `GET /api/v1/business/scores` returns the score and per-section breakdowns for the demo workspace. Source: `backend/app/services/health_score_service.py`. |
+| **2** | **Profile-matched schemes** with match %, source authority, last-verified date, and disclaimer per match. Catalog has **7 curated entries** — CGTMSE, ZED, PMEGP, MAI, MUDRA Shishu, NSIC, Udyam — sourced from `backend/app/services/schemes_sprint16_service.py` (`SCHEMES_CATALOG`). | `GET /api/v1/business/schemes` returns the on-disk catalog matches. The catalog itself lives in `backend/app/services/schemes_sprint16_service.py`, loaded into a knowledge base at startup. |
 | **3** | **3m / 6m / 12m scenario horizons** for forward-looking estimates, each with confidence and a `no guarantee` label, plus **1-click PDF + CSV reports** formatted for bank-loan applications. | `GET /api/v1/analytics/forecast` returns the horizons; the Reports UI exports PDF (ReportLab) and CSV with the health snapshot, scheme matches, and scenarios. |
 
 We use **"Profile match"**, never "You are eligible" / "Approved" / "Guaranteed" / "You will receive funding" — see [`docs/HACKATHON_VISION.md`](docs/HACKATHON_VISION.md).
@@ -61,7 +61,7 @@ The AI layer has two clearly separated parts. The trust boundary is a hard rule 
 
 | Layer | What it does | Where to look |
 |-------|--------------|---------------|
-| **Deterministic engines** | Compute Health Score, scheme profile-match %, and scenario horizons from the stored business profile. Pure rule-driven. Same inputs always produce the same outputs. | `backend/app/services/business_service.py`, scheme engine under `backend/app/services/`. |
+| **Deterministic engines** | Compute Profile Readiness Score (per-section completeness), scheme profile-match %, and scenario horizons from the stored business profile. Pure rule-driven. Same inputs always produce the same outputs. | `backend/app/services/health_score_service.py`, `backend/app/services/business_service.py`, scheme engine under `backend/app/services/`. |
 | **Grounded generative synthesis** | An *optional* OpenAI-compatible LLM rephrases the deterministic evidence bundle (scores + schemes + horizon) into natural-language answers. If no API key is set, a safe placeholder provider is used. | `backend/app/services/ai/providers/` (`base.py`, `factory.py`, `openai_compatible.py`, `prompt_builder.py`, `context_builder.py`). |
 
 What is **explicitly not** in the architecture:
@@ -189,7 +189,7 @@ Read this section before quoting the marketing site.
 1. **No embeddings, no vector store.** The AI layer is rule engines + an optional LLM rephraser. Any "vector search over official gazettes" claim is wrong and was removed from the marketing copy in P7.
 2. **No AES-256 at rest.** Auth uses JWT HS256 with HTTPOnly cookies. Database-at-rest encryption depends on the deployment platform (Postgres volume encryption, disk encryption, etc.) — UrsBiz does not provide it.
 3. **No sub-50ms latency SLO.** Measured latency on dev hardware is recorded in `H7_6_PUBLIC_DEPLOYMENT_REPORT.md`; do not treat it as a global SLA.
-4. **Scheme catalog is 14+ entries**, not 25+. The catalog is on-disk, versioned YAML/JSON, and grows under `docs/scheme-catalog/` as entries are verified.
+4. **Scheme catalog is 7 curated entries** — CGTMSE, ZED, PMEGP, MAI (Market Access Initiative), MUDRA Shishu, NSIC, Udyam. Authoritative source: `backend/app/services/schemes_sprint16_service.py` → `SCHEMES_CATALOG`. Each entry is profile-matched, not all match every business. The catalog grows under the same module as new schemes are verified.
 5. **No autonomous background scheduler.** "Daily briefings" are produced on demand by hitting the AI endpoint; no cron or background worker ships in this codebase.
 6. **Single-process demo DB.** `backend/ursbiz_prod.db` is SQLite and is for the hackathon demo. For multi-user / production traffic, switch `DATABASE_URL` to PostgreSQL.
 7. **No national-scale impact claims.** Statistics about "63M+ MSMEs", "30% GDP contribution", or "110M+ employment impact" were removed because UrsBiz has no measurement methodology for them. Outcome numbers in the demo are demo numbers.

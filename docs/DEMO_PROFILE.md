@@ -155,7 +155,7 @@ ship the defaults.
 | Digital Twin | Multiple certifications + IEC number push the archetype engine into "Compliance Leader / Export-Ready". |
 | Predictive Analytics | Forecast engine has revenue + capacity utilisation + monthly production to model from. |
 | Recommendations | Challenge rows (supplier dependency, digital gap, single buyer) drive actionable suggestions. |
-| Government Schemes | Textile + Tirupur + MSME band returns 14+ matched schemes including ZED, TUF, MUDRA. |
+| Government Schemes | Textile + Tirupur + MSME band returns the 7 curated scheme and registration programs — CGTMSE, ZED, PMEGP, MAI, MUDRA Shishu, NSIC, Udyam — each with match %, official authority, last-verified date, and disclaimer. |
 | Action Board | Seeded with 4 demo items so the board is non-empty on first login. |
 | Reports (CSV/PDF/unified) | Profile + products + certifications + export history produce a multi-page business snapshot. |
 | AI Assistant | Has products, goals, challenges, and schemes to ground every response. |

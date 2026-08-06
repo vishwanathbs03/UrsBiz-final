@@ -39,12 +39,19 @@ export function SchemesView() {
 
   const allSchemes = useMemo(() => {
     if (!data?.schemes) return [];
-    return [
+    // Dedupe by id — backend can place the same scheme into multiple
+    // buckets (e.g. recommended + eligible). Without dedupe, React
+    // throws "two children with the same key" warnings.
+    const seen = new Map<string, SchemeItem>();
+    for (const s of [
       ...data.schemes.recommended,
       ...data.schemes.eligible,
       ...data.schemes.partially_eligible,
       ...data.schemes.not_eligible,
-    ];
+    ]) {
+      if (!seen.has(s.id)) seen.set(s.id, s);
+    }
+    return Array.from(seen.values());
   }, [data]);
 
   const filteredSchemes = useMemo(() => {

@@ -56,8 +56,9 @@ export function MobileDrawer({ open, onClose }: MobileDrawerProps) {
       id="mobile-drawer"
       aria-hidden={!open}
       className={cn(
-        "fixed inset-0 z-50 md:hidden",
+        "fixed inset-0 z-50 overflow-x-hidden md:hidden",
         open ? "pointer-events-auto" : "pointer-events-none",
+        !open && "hidden",
       )}
     >
       <button

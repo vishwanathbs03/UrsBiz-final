@@ -30,27 +30,27 @@ export function Navbar({ className }: NavbarProps) {
         className,
       )}
     >
-      <div className="container flex h-16 items-center justify-between">
-        <div className="flex items-center gap-8">
+      <div className="container flex h-16 items-center gap-4">
+        <div className="flex min-w-0 items-center gap-8">
           <Link
             href="/"
             aria-label="UrsBiz — home"
-            className="rounded-md focus-visible:outline-none"
+            className="shrink-0 rounded-md focus-visible:outline-none"
           >
             <Logo />
           </Link>
 
-          <nav aria-label="Primary" className="hidden md:block">
-            <ul className="flex items-center gap-1">
+          <nav aria-label="Primary" className="hidden min-w-0 md:block">
+            <ul className="flex items-center gap-1 overflow-x-auto">
               {mainNavLinks.map((link) => {
                 const active = isActiveLink(pathname, link.href);
                 return (
-                  <li key={link.href}>
+                  <li key={link.href} className="shrink-0">
                     <Link
                       href={link.href}
                       aria-current={active ? "page" : undefined}
                       className={cn(
-                        "rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                        "whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium transition-colors",
                         active
                           ? "text-foreground"
                           : "text-muted-foreground hover:text-foreground",
@@ -65,7 +65,7 @@ export function Navbar({ className }: NavbarProps) {
           </nav>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           <ThemeToggle />
           <NavbarAuth />
         </div>

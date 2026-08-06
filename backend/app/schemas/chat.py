@@ -197,6 +197,8 @@ class ChatGenerationMeta(BaseModel):
     prompt_truncated: bool = False
     provider_latency_ms: int | None = Field(default=None, ge=0)
     grounded_payload: ChatGroundedResponse | None = None
+    business_evidence_validated: bool = False
+    context_manifest: dict | None = None
 
 
 # --------------------------------------------------------------------------- #

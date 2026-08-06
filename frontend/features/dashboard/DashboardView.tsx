@@ -221,7 +221,7 @@ export function DashboardView() {
             <h2 className="text-xs font-extrabold uppercase tracking-wider text-muted-foreground">
               Secondary Details — View in detail
             </h2>
-            <div className="flex items-center gap-2 text-xs">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
               <Button asChild size="sm" variant="ghost" className="gap-1">
                 <Link href="/intelligence">
                   Open Intelligence
