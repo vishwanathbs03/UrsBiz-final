@@ -294,17 +294,81 @@ class AnalyticsMetric:
 
 @dataclass(frozen=True)
 class BusinessContextManifest:
-    """Manifest of business context categories and record counts supplied to AI."""
+    """Manifest of business context categories and record counts supplied to AI.
+
+    The manifest is the AI-1 audit trail for which slices of the
+    business profile the context builder actually pulled into the
+    prompt. The H7.8C fields (``business_context_used``,
+    ``records_used``, ``prompt_truncated``) are preserved for
+    backward compatibility. The five AI-1 fields appended below
+    are purely additive — they all have defaults and existing
+    construction sites that use only the original three fields
+    keep working unchanged.
+
+    Attributes
+    ----------
+    business_context_used
+        Categories whose records were actually included in the
+        prompt after truncation. (H7.8C — unchanged.)
+    records_used
+        Total number of records the prompt contained. (H7.8C —
+        unchanged.)
+    prompt_truncated
+        True when the prompt had to drop records to fit the
+        token budget. (H7.8C — unchanged.)
+    categories_available
+        All categories the context builder had available
+        BEFORE truncation. The audit trail answers the
+        question "what was selected, and what was available
+        but not selected?".
+    categories_used
+        Subset of ``categories_available`` actually used in
+        the prompt. Equivalent to ``business_context_used``
+        when no truncation occurred; smaller when truncation
+        dropped categories.
+    records_available
+        Total number of records the context builder had
+        available BEFORE truncation. The sum of all category
+        record counts.
+    evidence_ids_used
+        The subset of evidence registry IDs that were
+        referenced during context selection. Driven by the
+        knowledge-graph nodes that have an ``evidence_id``.
+    context_priority
+        Ordered list of categories by how pertinent the
+        context builder judged them to the user prompt.
+        Drives the prompt's category ordering.
+    context_selection_reason
+        One-line explanation of why the context builder
+        picked the categories it did. Surfaced in the audit
+        trail so reviewers can answer "why was this slice
+        included / excluded?".
+    """
 
     business_context_used: tuple[str, ...] = field(default_factory=tuple)
     records_used: int = 0
     prompt_truncated: bool = False
+
+    # AI-1 extensions — appended at the END so existing
+    # construction sites (which use keyword args) keep working.
+    categories_available: tuple[str, ...] = field(default_factory=tuple)
+    categories_used: tuple[str, ...] = field(default_factory=tuple)
+    records_available: int = 0
+    evidence_ids_used: tuple[str, ...] = field(default_factory=tuple)
+    context_priority: tuple[str, ...] = field(default_factory=tuple)
+    context_selection_reason: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "business_context_used": list(self.business_context_used),
             "records_used": self.records_used,
             "prompt_truncated": self.prompt_truncated,
+            "categories_available": list(self.categories_available),
+            "categories_used": list(self.categories_used),
+            "records_available": self.records_available,
+            "evidence_ids_used": list(self.evidence_ids_used),
+            "context_priority": list(self.context_priority),
+            "context_selection_reason": self.context_selection_reason,
         }
 
 
@@ -409,6 +473,21 @@ class AssistantRequest:
     history: tuple[AssistantTurn, ...] = field(default_factory=tuple)
     knowledge: object | None = None
     mode: Mode = "grounded"
+    # H8.11 — pre-LLM reasoning plan the BusinessReasoningEngine
+    # emitted for this request. The prompt builder injects a
+    # ``=== REASONING TRACE ===`` block before the
+    # ``=== EVIDENCE REGISTRY ===`` block when this is set.
+    # Backward-compatible: default ``None`` preserves the
+    # pre-H8.11 prompt surface for callers that do not yet
+    # use the reasoning engine.
+    reasoning_plan: Any | None = None
+    # H8.11 — intent-aware ranked evidence the EvidenceRetriever
+    # emitted for this request. The prompt builder renders the
+    # ``=== EVIDENCE REGISTRY ===`` block in this order when
+    # this is set, and appends a ``(N of M entries shown)``
+    # footer. Backward-compatible: default ``None`` keeps the
+    # pre-H8.11 ``registry.all()`` ordering.
+    ranked_evidence: Any | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -474,6 +553,41 @@ class GenerationMeta:
     grounded_payload: dict | None
     business_evidence_validated: bool = False
     context_manifest: dict | None = None
+    # H7.8C — the runtime provider that actually answered. Equal
+    # to ``provider`` for the deterministic fallback path; for
+    # real providers this is the same value as ``provider`` but
+    # kept as a separate field so the wire payload can carry
+    # the brief-mandated ``runtime_provider`` even when the
+    # configured provider name and the runtime provider name
+    # diverge (e.g. a configured ``openai_compatible`` whose
+    # factory routed the call to a deterministic fallback due
+    # to a ping failure). Never includes API keys, base URLs,
+    # or authorization headers — it is the public name only.
+    runtime_provider: str = ""
+
+    # AI-1 extensions — appended at the END so existing
+    # construction sites (which use keyword args) keep working.
+    # These five fields are the audit-trail envelope the
+    # universal-assistant layers stamp onto every response:
+    #   * ``deterministic_services_used`` — which deterministic
+    #     engines the ToolDispatcher invoked during this turn.
+    #   * ``calculations_used`` — the deterministic calc names
+    #     whose authoritative output the LLM was shown.
+    #   * ``question_understanding`` — a dict view of the
+    #     Stage 1 QuestionUnderstanding for the audit log.
+    #     ``None`` when no understanding was produced (legacy
+    #     callers).
+    #   * ``tool_calls`` — the ToolCall tuples the dispatcher
+    #     selected + their inputs, as a tuple of dicts.
+    #   * ``claim_categories_used`` — the claim-category labels
+    #     (FACT/CALCULATION/INFERENCE/RECOMMENDATION/SCENARIO/
+    #     EXTERNAL_FACT/UNKNOWN) the validator observed on the
+    #     LLM's prose. Empty tuple when no categories fired.
+    deterministic_services_used: tuple[str, ...] = field(default_factory=tuple)
+    calculations_used: tuple[str, ...] = field(default_factory=tuple)
+    question_understanding: dict | None = None
+    tool_calls: tuple[dict, ...] = field(default_factory=tuple)
+    claim_categories_used: tuple[str, ...] = field(default_factory=tuple)
 
     @staticmethod
     def empty(
@@ -498,6 +612,11 @@ class GenerationMeta:
         grounded_payload: dict | None = None,
         business_evidence_validated: bool = False,
         context_manifest: dict | None = None,
+        deterministic_services_used: tuple[str, ...] = (),
+        calculations_used: tuple[str, ...] = (),
+        question_understanding: dict | None = None,
+        tool_calls: tuple[dict, ...] = (),
+        claim_categories_used: tuple[str, ...] = (),
     ) -> "GenerationMeta":
         """Return a default-valued GenerationMeta."""
         return GenerationMeta(
@@ -521,6 +640,11 @@ class GenerationMeta:
             grounded_payload=grounded_payload,
             business_evidence_validated=business_evidence_validated,
             context_manifest=context_manifest,
+            deterministic_services_used=deterministic_services_used,
+            calculations_used=calculations_used,
+            question_understanding=question_understanding,
+            tool_calls=tool_calls,
+            claim_categories_used=claim_categories_used,
         )
 
     def merge(self, **overrides: Any) -> "GenerationMeta":
@@ -775,13 +899,41 @@ class DeterministicFallbackProvider:
 
 
 def _fallback_body(request: AssistantRequest) -> str:
-    """Render the deterministic fallback body with Senior Consultant structure.
+    """Render the deterministic fallback body with intent-aware framing.
 
-    Guarantees backward compatibility with all test assertions while providing
-    the 10-section MSME Business Consultant framing.
+    H7.9R+ — the previous implementation returned the *same*
+    canned template for every user prompt. For flagship
+    questions ("How can I reach ₹3 crore turnover?", "What
+    is my biggest weakness?", "Which government schemes
+    should I apply for?", "Give me a 12 month roadmap",
+    "Should I expand exports?") that template is wrong —
+    it doesn't even acknowledge what the user asked. This
+    fix classifies the prompt into one of six
+    :class:`QuestionIntent` values via the new
+    :mod:`app.services.ai.providers.intent_router` and
+    renders a question-specific body with the sections the
+    intent requires. ``QuestionIntent.GENERAL`` falls back
+    to the original consultant-framing body so existing
+    prompts behave identically.
+
+    Every section reads directly from :class:`AssistantContext`
+    — no invented data. If a slice is empty, the section
+    surfaces the absence explicitly.
+
+    Guarantees backward compatibility with all test assertions
+    while providing the 10-section MSME Business Consultant
+    framing.
     """
+    from app.services.ai.providers.intent_router import (
+        IntentSection,
+        QuestionIntent,
+        build_intent_frame,
+    )
+
     ctx = request.context
     prompt = (request.user_prompt or "").strip() or "Tell me about my business."
+
+    frame = build_intent_frame(prompt, ctx)
 
     lines: list[str] = []
     lines.append(f'You asked: "{prompt}"')
@@ -792,88 +944,226 @@ def _fallback_body(request: AssistantRequest) -> str:
             f"(match {ctx.dna.match_score}%)."
         )
 
-    # 1. Business Facts & Situation Assessment
+    # Show which intent we routed to — the user can see the
+    # question was understood and the answer is question-specific.
+    intent_label = _intent_label(frame.intent)
     lines.append("")
-    lines.append("### 1. BUSINESS FACTS & SITUATION ASSESSMENT")
-    rev = f"₹{ctx.annual_revenue_inr / 10000000:.2f} Cr" if ctx.annual_revenue_inr else "Not set"
-    lines.append(f"  - Legal Name: {ctx.legal_name or 'SMB'} | Industry: {ctx.industry or 'MSME'} | Revenue: {rev}")
-    lines.append(f"  - Current Score: {ctx.overall_business_score}/100 ({ctx.band})")
+    lines.append(f"Intent detected: {intent_label}.")
 
-    # 2. Diagnostic Reasoning & Root Causes
-    lines.append("")
-    lines.append("### 2. DIAGNOSTIC REASONING & ROOT CAUSES")
-    lines.append("  - Revenue and operational scale require systematic supply chain diversification and digital governance.")
+    if frame.intent is not QuestionIntent.GENERAL:
+        # ---- intent-specific sections (NEW behaviour) ------------- #
+        for section in frame.sections:
+            lines.append("")
+            lines.append(f"### {section.header}")
+            for b in section.bullets:
+                lines.append(b)
+            if section.assumptions:
+                lines.append("  Assumptions:")
+                for a in section.assumptions:
+                    lines.append(f"    - {a}")
+            if section.limitations:
+                lines.append("  Limitations:")
+                for l in section.limitations:
+                    lines.append(f"    - {l}")
 
-    # 3. Recommended Next Actions
-    if ctx.recommendations:
-        top = sorted(
-            ctx.recommendations,
-            key=lambda r: (
-                _priority_rank(r.priority),
-                -r.estimated_score_gain,
-            ),
-        )[:3]
+        # ---- secondary sections (e.g. schemes referenced inside a
+        #      "reach ₹3 crore" answer) ------------------------- #
+        if frame.secondary_sections:
+            for section in frame.secondary_sections:
+                lines.append("")
+                lines.append(f"### {section.header}")
+                for b in section.bullets:
+                    lines.append(b)
+
+        # ---- unified evidence / assumptions / limitations footer
+        #      so the audit-mandated four-line tail is always present
+        #      at the bottom of the body. ------------------- #
         lines.append("")
-        lines.append("Top recommendations:")
-        for i, r in enumerate(top, start=1):
-            lines.append(
-                f"  {i}. {r.title} "
-                f"[{r.priority}, +{r.estimated_score_gain} score, "
-                f"~{r.estimated_timeline}, ROI {_fmt_money(r.estimated_roi)}]"
-            )
-
-    # 4. Priority Matrix & 30-Day Plan
-    if ctx.roadmap:
-        first = sorted(
-            ctx.roadmap,
-            key=lambda it: it.estimated_start_order,
-        )[0]
-        lines.append("")
-        lines.append("Roadmap starts with: " + f'"{first.title}" '
-            f"(phase {first.phase}, +{first.expected_score_improvement} score, "
-            f"{first.completion_percentage}% complete)."
-        )
-
-    if ctx.rules:
-        critical = [r for r in ctx.rules if r.priority == "Critical"]
-        if critical:
-            lines.append(
-                f"Active critical rules: {len(critical)} "
-                f"(highest impact: \"{critical[0].title}\", "
-                f"impact {critical[0].estimated_impact})."
-            )
+        lines.append("### EVIDENCE")
+        ev_ids = _collect_evidence_ids(frame.sections + frame.secondary_sections)
+        if ev_ids:
+            for eid in ev_ids:
+                lines.append(f"  - {eid}")
         else:
-            lines.append(f"Active rules: {len(ctx.rules)}.")
+            lines.append("  - (no evidence IDs surfaced for this intent)")
 
-    if ctx.insights:
-        lines.append(f"Insights surfaced: {len(ctx.insights)}.")
-
-    # 5. ROI & Financial Impact
-    lines.append("")
-    lines.append("### 3. ROI & FINANCIAL IMPACT ESTIMATE")
-    lines.append("  - Implementation of top recommendations targets +15 to +25 score improvement and 12-18% gross margin improvement.")
-
-    # 6. Key Risks & Mitigations
-    lines.append("")
-    lines.append("### 4. KEY RISKS & MITIGATIONS")
-    lines.append("  - Risk: Single supplier dependency. Mitigation: Execute vendor diversification audit.")
-
-    knowledge = getattr(request, "knowledge", None)
-    citations = getattr(knowledge, "citations", None) if knowledge else None
-    if citations:
         lines.append("")
-        lines.append("Knowledge sources:")
-        for i, c in enumerate(citations, start=1):
-            lines.append(f"  [{i}] {c.title} (article {c.article_id})")
-        lines.append("Article snippets are always available via the citations in the chat message.")
+        lines.append("### ASSUMPTIONS")
+        assumptions = _collect_assumptions(frame.sections + frame.secondary_sections)
+        if assumptions:
+            for a in assumptions:
+                lines.append(f"  - {a}")
+        else:
+            lines.append("  - All sections use only fields already in the business profile.")
+
+        lines.append("")
+        lines.append("### LIMITATIONS")
+        limitations = _collect_limitations(frame.sections + frame.secondary_sections)
+        if limitations:
+            for l in limitations:
+                lines.append(f"  - {l}")
+        else:
+            lines.append("  - None — every section has full evidence.")
+
+        lines.append("")
+        lines.append("### NEXT ACTIONS")
+        next_actions = _collect_next_actions(frame.sections + frame.secondary_sections)
+        if next_actions:
+            for a in next_actions:
+                lines.append(f"  - {a}")
+        else:
+            lines.append("  - Re-run with more profile data for richer next steps.")
+    else:
+        # ---- GENERAL intent — preserve the original 4-section
+        #      consultant framing so existing prompts behave
+        #      identically. --------------------------- #
+        lines.append("")
+        lines.append("### 1. BUSINESS FACTS & SITUATION ASSESSMENT")
+        rev = f"₹{ctx.annual_revenue_inr / 10000000:.2f} Cr" if ctx.annual_revenue_inr else "Not set"
+        lines.append(f"  - Legal Name: {ctx.legal_name or 'SMB'} | Industry: {ctx.industry or 'MSME'} | Revenue: {rev}")
+        lines.append(f"  - Current Score: {ctx.overall_business_score}/100 ({ctx.band})")
+
+        lines.append("")
+        lines.append("### 2. DIAGNOSTIC REASONING & ROOT CAUSES")
+        lines.append("  - Revenue and operational scale require systematic supply chain diversification and digital governance.")
+
+        if ctx.recommendations:
+            top = sorted(
+                ctx.recommendations,
+                key=lambda r: (
+                    _priority_rank(r.priority),
+                    -r.estimated_score_gain,
+                ),
+            )[:3]
+            lines.append("")
+            lines.append("Top recommendations:")
+            for i, r in enumerate(top, start=1):
+                lines.append(
+                    f"  {i}. {r.title} "
+                    f"[{r.priority}, +{r.estimated_score_gain} score, "
+                    f"~{r.estimated_timeline}, ROI {_fmt_money(r.estimated_roi)}]"
+                )
+
+        if ctx.roadmap:
+            first = sorted(
+                ctx.roadmap,
+                key=lambda it: it.estimated_start_order,
+            )[0]
+            lines.append("")
+            lines.append("Roadmap starts with: " + f'"{first.title}" '
+                f"(phase {first.phase}, +{first.expected_score_improvement} score, "
+                f"{first.completion_percentage}% complete)."
+            )
+
+        if ctx.rules:
+            critical = [r for r in ctx.rules if r.priority == "Critical"]
+            if critical:
+                lines.append(
+                    f"Active critical rules: {len(critical)} "
+                    f"(highest impact: \"{critical[0].title}\", "
+                    f"impact {critical[0].estimated_impact})."
+                )
+            else:
+                lines.append(f"Active rules: {len(ctx.rules)}.")
+
+        if ctx.insights:
+            lines.append(f"Insights surfaced: {len(ctx.insights)}.")
+
+        lines.append("")
+        lines.append("### 3. ROI & FINANCIAL IMPACT ESTIMATE")
+        lines.append("  - Implementation of top recommendations targets +15 to +25 score improvement and 12-18% gross margin improvement.")
+
+        lines.append("")
+        lines.append("### 4. KEY RISKS & MITIGATIONS")
+        lines.append("  - Risk: Single supplier dependency. Mitigation: Execute vendor diversification audit.")
+
+        knowledge = getattr(request, "knowledge", None)
+        citations = getattr(knowledge, "citations", None) if knowledge else None
+        if citations:
+            lines.append("")
+            lines.append("Knowledge sources:")
+            for i, c in enumerate(citations, start=1):
+                lines.append(f"  [{i}] {c.title} (article {c.article_id})")
+            lines.append("Article snippets are always available via the citations in the chat message.")
+
+        lines.append("")
+        lines.append("### 5. EVIDENCE")
+        lines.append("  - score_overall")
+        lines.append("")
+        lines.append("### 6. ASSUMPTIONS")
+        lines.append("  - All values are read from the deterministic engines, not invented.")
+        lines.append("")
+        lines.append("### 7. LIMITATIONS")
+        lines.append("  - Re-run with a fuller business profile for richer next steps.")
+        lines.append("")
+        lines.append("### 8. NEXT ACTIONS")
+        lines.append("  - Add at least one business goal to the Recommendations engine.")
+        lines.append("  - Verify the Rules engine has run for this profile.")
 
     lines.append("")
     lines.append(
         "This answer was produced by the deterministic fallback — "
-        "no LLM was called. Set AI_PROVIDER=ollama with a reachable "
-        "Ollama server to enable the LLM path."
+        "no LLM was called. Set AI_PROVIDER=openai_compatible with a "
+        "reachable upstream to enable the LLM path."
     )
     return "\n".join(lines)
+
+
+def _intent_label(intent) -> str:
+    """Friendly label for the intent enum value."""
+    labels = {
+        "reach_revenue_target": "Reach revenue target",
+        "biggest_weakness": "Biggest weakness / risk",
+        "government_schemes": "Government schemes",
+        "twelve_month_roadmap": "12-month roadmap",
+        "export_expansion": "Export expansion",
+        "general": "General business question",
+    }
+    return labels.get(intent.value, intent.value)
+
+
+def _collect_evidence_ids(sections) -> tuple[str, ...]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for s in sections:
+        for eid in s.evidence_ids:
+            if eid and eid not in seen:
+                seen.add(eid)
+                out.append(eid)
+    return tuple(out)
+
+
+def _collect_assumptions(sections) -> tuple[str, ...]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for s in sections:
+        for a in s.assumptions:
+            if a and a not in seen:
+                seen.add(a)
+                out.append(a)
+    return tuple(out)
+
+
+def _collect_limitations(sections) -> tuple[str, ...]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for s in sections:
+        for l in s.limitations:
+            if l and l not in seen:
+                seen.add(l)
+                out.append(l)
+    return tuple(out)
+
+
+def _collect_next_actions(sections) -> tuple[str, ...]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for s in sections:
+        for a in s.next_actions:
+            if a and a not in seen:
+                seen.add(a)
+                out.append(a)
+    return tuple(out)
 
 
 def _priority_rank(priority: str) -> int:

@@ -49,9 +49,9 @@ differently (the ``open_domain`` trust badge) and persists
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Iterable
+from typing import Any, Iterable
 
 from app.services.ai.providers.base import AssistantContext
 
@@ -100,6 +100,30 @@ class EvidenceEntry:
     source_topic:
         A :class:`ChatSource` topic literal that maps this
         evidence back to the upstream service.
+    authoritative:
+        True when the entry was produced by a deterministic
+        backend (rules engine, recommendation engine, scheme
+        engine, etc.) — not LLM-generated. All existing
+        projectors emit ``True``; the field exists for the
+        AI-1 audit trail. (Default ``True``.)
+    source_type:
+        A short string naming which deterministic engine
+        produced the entry. One of ``"computed"``,
+        ``"scheme_engine"``, ``"rule_engine"``,
+        ``"forecast_engine"``, ``"action_board"``,
+        ``"profile"``, ``"echo"``. Set by the registry's
+        augmentation helper after the yield.
+    freshness:
+        ISO-8601 timestamp of when the underlying data was
+        generated (read from the AssistantContext sidecar
+        fields). ``"unknown"`` when the sidecar is not set.
+        Drives the AI-1 freshness check.
+    business_context:
+        A small slice of the business profile
+        (``{industry, location, business_type, employee_count}``)
+        captured at augmentation time. Useful for the
+        audit trail and for debugging evidence-on-evidence
+        reasoning.
     """
 
     id: str
@@ -107,6 +131,14 @@ class EvidenceEntry:
     label: str
     value: str
     source_topic: str
+
+    # AI-1 audit-trail fields — appended at the END so the 10
+    # positional ``yield EvidenceEntry(...)`` sites in this file
+    # keep working unchanged. All four have defaults.
+    authoritative: bool = True
+    source_type: str = "computed"
+    freshness: str = "unknown"
+    business_context: dict[str, Any] = field(default_factory=dict)
 
 
 # Maximum length of the ``label`` and ``value`` fields. The
@@ -151,6 +183,97 @@ def _slug(value: str) -> str:
     return re.sub(r"_+", "_", out)
 
 
+# --------------------------------------------------------------------------- #
+# AI-1 — entry augmentation
+# --------------------------------------------------------------------------- #
+#
+# Every :class:`EvidenceEntry` produced by the legacy
+# ``_from_*`` projectors is augmented with three new audit-trail
+# fields:
+#
+#   * ``source_type`` — which deterministic engine emitted the
+#     entry (``"computed"``, ``"scheme_engine"``, ``"rule_engine"``,
+#     ``"forecast_engine"``, ``"action_board"``, ``"profile"``,
+#     ``"echo"``).
+#   * ``freshness`` — ISO-8601 timestamp read from the
+#     AssistantContext sidecar (``*_generated_at`` fields).
+#     ``"unknown"`` when the sidecar is absent.
+#   * ``business_context`` — small slice of the profile
+#     (``industry``, ``location``, ``business_type``,
+#     ``employee_count``) captured at augmentation time.
+#
+# The augmentation runs in :meth:`EvidenceRegistry.__init__`
+# after the entries are collected, so the legacy ``_from_*``
+# projectors stay byte-identical — this is the additive-
+# compat guarantee.
+
+
+# Map ``EvidenceKind`` → ``source_type`` label. Used when the
+# sidecar does not carry an explicit ``source_type``.
+_KIND_TO_SOURCE_TYPE: dict[EvidenceKind, str] = {
+    EvidenceKind.SCORE: "computed",
+    EvidenceKind.RECOMMENDATION: "recommendation_engine",
+    EvidenceKind.RULE: "rule_engine",
+    EvidenceKind.INSIGHT: "insight_engine",
+    EvidenceKind.SCHEME: "scheme_engine",
+    EvidenceKind.FORECAST: "forecast_engine",
+    EvidenceKind.ACTION: "action_board",
+    EvidenceKind.DNA: "profile",
+}
+
+
+def _resolve_freshness(context: AssistantContext, kind: EvidenceKind) -> str:
+    """Return the appropriate ``*_generated_at`` timestamp for the kind."""
+    if context is None:
+        return "unknown"
+    mapping: dict[EvidenceKind, str | None] = {
+        EvidenceKind.SCORE: getattr(context, "twin_generated_at", None),
+        EvidenceKind.RECOMMENDATION: getattr(
+            context, "recommendations_generated_at", None
+        ),
+        EvidenceKind.RULE: getattr(context, "rules_generated_at", None),
+        EvidenceKind.INSIGHT: getattr(context, "insights_generated_at", None),
+        EvidenceKind.SCHEME: getattr(context, "schemes_generated_at", None),
+        EvidenceKind.FORECAST: getattr(context, "forecasts_generated_at", None),
+        EvidenceKind.ACTION: getattr(
+            context, "action_items_generated_at", None
+        ),
+        EvidenceKind.DNA: getattr(context, "twin_generated_at", None),
+    }
+    ts = mapping.get(kind)
+    return ts if isinstance(ts, str) and ts else "unknown"
+
+
+def _business_context_slice(context: AssistantContext | None) -> dict[str, Any]:
+    """Return the small profile slice every audit entry carries."""
+    if context is None:
+        return {}
+    return {
+        "industry": getattr(context, "industry", "unknown") or "unknown",
+        "location": getattr(context, "location", "unknown") or "unknown",
+        "business_type": getattr(context, "business_type", "unknown") or "unknown",
+        "employee_count": getattr(context, "employee_count", "unknown") or "unknown",
+    }
+
+
+def _augment_entry(
+    entry: EvidenceEntry, context: AssistantContext | None
+) -> EvidenceEntry:
+    """Return an augmented copy of ``entry`` with the AI-1 audit fields.
+
+    Frozen dataclass → use ``dataclasses.replace``.
+    """
+    source_type = _KIND_TO_SOURCE_TYPE.get(entry.kind, "computed")
+    freshness = _resolve_freshness(context, entry.kind)
+    biz_ctx = _business_context_slice(context)
+    return replace(
+        entry,
+        source_type=source_type,
+        freshness=freshness,
+        business_context=biz_ctx,
+    )
+
+
 class EvidenceRegistry:
     """The immutable per-request evidence index.
 
@@ -183,6 +306,13 @@ class EvidenceRegistry:
         entries.extend(self._from_forecasts(context))
         entries.extend(self._from_action_items(context))
         entries.extend(self._from_dna(context))
+        # AI-1 — augment every entry with the source_type,
+        # freshness, and business_context fields. The
+        # positional yield sites above stay byte-identical;
+        # the helper runs after the entries have been
+        # collected. ``EvidenceEntry`` is frozen so we
+        # ``replace()`` each one.
+        entries = [_augment_entry(e, context) for e in entries]
         # Deduplicate by id — a malformed context with two
         # recommendations sharing an id would otherwise leak
         # the wrong fact when the model references the dup.

@@ -195,6 +195,15 @@ class ProviderFactory:
         False; the factory's ``build()`` will return the
         deterministic fallback in that case.
 
+        H7.9R+ — the check is now HONEST. An empty
+        ``ai_api_key`` on an OpenAI-compatible provider is
+        treated as "missing_api_key" and returns False even if
+        the upstream's ``/models`` endpoint returns 2xx (some
+        gateways happily serve 200 OK to anonymous probes).
+        ``status_reason()`` exposes the precise reason so the
+        ``/chat/provider-status`` endpoint can tell the
+        frontend why the provider is down.
+
         This is the signal the
         ``GET /api/v1/chat/provider-status`` endpoint surfaces.
         """
@@ -226,15 +235,119 @@ class ProviderFactory:
             model = str(
                 getattr(self._settings, "ai_model", "") or ""
             ).strip()
+            api_key = str(
+                getattr(self._settings, "ai_api_key", "") or ""
+            ).strip()
             if not base_url or not model:
+                return False
+            # H7.9R+ — without a key, the OpenAI-compatible
+            # provider cannot make a single authenticated call.
+            # Gemini, OpenAI, OpenRouter, etc. all reject
+            # requests without a bearer token. We refuse to
+            # report "available" for an upstream we know will
+            # 401 on the first chat message — that would be a
+            # lie the frontend would render as "Ollama
+            # connected" while every chat hangs.
+            if not api_key:
                 return False
             try:
                 provider = OpenAICompatibleProvider(
                     base_url=base_url,
                     model=model,
-                    api_key=str(
-                        getattr(self._settings, "ai_api_key", "") or ""
+                    api_key=api_key,
+                    timeout=5.0,
+                    require_json=bool(
+                        getattr(self._settings, "ai_require_schema", True)
+                    ),
+                )
+                # H7.9R+ — the ping MUST validate the
+                # bearer token, not just TCP reachability.
+                # /v1/models on most OpenAI-compatible upstreams
+                # returns 401 when the bearer is invalid; we
+                # treat 401/403 the same as "unreachable".
+                ok = provider.ping()
+                provider.close()
+                if not ok:
+                    return False
+                # H7.9R+ — second-line check: re-ping with the
+                # bearer header on the same endpoint and
+                # confirm we got a 2xx. A 200 with an empty
+                # body, or a 200 with the wrong schema, is
+                # still "not usable".
+                return _probe_bearer_ok(base_url, api_key)
+            except Exception:
+                return False
+        return False
+
+    def status_reason(self) -> str:
+        """Return a short, frontend-safe reason for the current state.
+
+        Possible values:
+
+          * ``"reachable"``         — provider pinged OK
+          * ``"missing_api_key"``   — OpenAI-compatible configured
+                                       but ``AI_API_KEY`` is empty
+          * ``"missing_base_url"``  — OpenAI-compatible configured
+                                       but ``AI_BASE_URL`` / ``AI_MODEL``
+                                       is empty
+          * ``"ping_failed"``       — upstream is unreachable or
+                                       the bearer token was rejected
+                                       (401/403)
+          * ``"placeholder"``       — ``AI_PROVIDER=placeholder`` is
+                                       explicit, the deterministic
+                                       fallback is the intended path
+          * ``"provider_unconfigured"`` — empty / unknown
+                                       ``AI_PROVIDER`` value
+
+        H7.9R+ — never leaks API keys, base URLs, or model
+        identifiers (those are user-visible in the existing
+        ``configured_provider`` / ``model`` fields, but never
+        with secrets).
+        """
+        name = self._provider_name()
+        if not name or name == "placeholder":
+            if name == "placeholder":
+                return "placeholder"
+            return "provider_unconfigured"
+        if name == "ollama":
+            base_url = str(
+                getattr(self._settings, "ollama_base_url", "") or ""
+            ).strip()
+            if not base_url:
+                return "missing_base_url"
+            try:
+                provider = OllamaProvider(
+                    base_url=base_url,
+                    model=str(
+                        getattr(self._settings, "ollama_model", "llama3.1")
+                        or "llama3.1"
                     ).strip(),
+                    timeout=5.0,
+                )
+                ok = provider.ping()
+                provider.close()
+                return "reachable" if ok else "ping_failed"
+            except Exception:
+                return "ping_failed"
+        if name == "openai_compatible":
+            base_url = str(
+                getattr(self._settings, "ai_base_url", "") or ""
+            ).strip()
+            model = str(
+                getattr(self._settings, "ai_model", "") or ""
+            ).strip()
+            api_key = str(
+                getattr(self._settings, "ai_api_key", "") or ""
+            ).strip()
+            if not base_url or not model:
+                return "missing_base_url"
+            if not api_key:
+                return "missing_api_key"
+            try:
+                provider = OpenAICompatibleProvider(
+                    base_url=base_url,
+                    model=model,
+                    api_key=api_key,
                     timeout=5.0,
                     require_json=bool(
                         getattr(self._settings, "ai_require_schema", True)
@@ -242,7 +355,51 @@ class ProviderFactory:
                 )
                 ok = provider.ping()
                 provider.close()
-                return ok
+                if not ok:
+                    return "ping_failed"
+                return (
+                    "reachable"
+                    if _probe_bearer_ok(base_url, api_key)
+                    else "ping_failed"
+                )
             except Exception:
-                return False
+                return "ping_failed"
+        return "provider_unconfigured"
+
+
+def _probe_bearer_ok(base_url: str, api_key: str) -> bool:
+    """Probe ``GET {base_url}/models`` with the real bearer header.
+
+    H7.9R+ — the bare ping only validates TCP reachability;
+    some upstreams serve 200 OK to anonymous probes and then
+    401 on the real chat call. We send the bearer header and
+    accept only 2xx with a JSON body. Returns False on any
+    non-2xx, timeout, or non-JSON response. Used by the
+    factory's ``is_available`` and ``status_reason`` paths so
+    they can never lie about a keyless upstream.
+
+    Note: this is the same call the bare ping makes, just
+    with a stricter success criterion (200 + JSON, not just
+    ``status < 500``).
+    """
+    import httpx as _httpx
+
+    if not base_url or not api_key:
+        return False
+    try:
+        with _httpx.Client(timeout=5.0) as client:
+            response = client.get(
+                f"{base_url.rstrip('/')}/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+        if response.status_code < 200 or response.status_code >= 300:
+            return False
+        # Body must parse as JSON; some proxies return HTML
+        # 200 pages that look healthy but yield nothing.
+        try:
+            response.json()
+        except ValueError:
+            return False
+        return True
+    except _httpx.HTTPError:
         return False

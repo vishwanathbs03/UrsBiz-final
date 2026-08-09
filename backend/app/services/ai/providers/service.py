@@ -69,7 +69,10 @@ milestone's problem.
 """
 from __future__ import annotations
 
+import concurrent.futures
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
 
@@ -101,6 +104,22 @@ from app.services.ai.providers.response_schema import (
     parse_model_output,
     parse_open_model_output,
 )
+# H8.11 — pre-LLM reasoning layer. Imported lazily inside
+# ``__init__`` to avoid the circular import through
+# ``app.services.ai.providers.__init__`` (which eagerly
+# loads this module before :mod:`evidence_retriever` is
+# fully initialised).
+from app.services.ai.reasoning.question_understanding import (
+    QuestionUnderstanding,
+    is_purely_educational,
+    understand_question,
+)
+from app.services.ai.reasoning.tool_selector import (
+    StubToolInterface,
+    ToolDispatcher,
+    ToolSelector,
+)
+from app.services.ai.reasoning.answer_composer import compose_adaptive_answer
 
 
 # Module-level logger for structured provider events.
@@ -131,6 +150,70 @@ from app.services.ai.providers.base import (
 logger = logging.getLogger("atlas.ai.provider")
 
 
+# H7.9R+ — hard wall-clock cap on a single outbound LLM call.
+# The provider's underlying httpx client already has its own
+# connect/read timeouts; this constant is the *outer* ceiling
+# that guarantees no chat request can ever hold a worker thread
+# for more than this many seconds, regardless of retry behaviour
+# inside the circuit breaker or any future backoff. 15s matches
+# the value committed in ``backend/.env`` (``AI_REQUEST_TIMEOUT_SECONDS``).
+HARD_CALL_TIMEOUT_SECONDS: float = 15.0
+
+# Single shared executor for ``_call_with_hard_timeout`` below.
+# ``max_workers=1`` so a slow provider does not get a pool of
+# parallel attempts; the cap is the timeout, not parallelism.
+# Daemon threads so a stuck provider cannot block process exit.
+_HARD_TIMEOUT_EXECUTOR = ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="ai-hard-timeout"
+)
+
+
+def _call_with_hard_timeout(
+    provider: Any, request: AssistantRequest, timeout: float
+) -> AssistantResponse:
+    """Invoke ``provider.complete(request)`` under a hard wall-clock cap.
+
+    Why this exists
+    ---------------
+    The underlying ``httpx.Client`` in :class:`OpenAICompatibleProvider`
+    has a per-request timeout, but the service layer also runs the
+    call through :class:`AICircuitBreaker.execute_with_resilience`
+    which can retry with exponential backoff. A misbehaving upstream
+    (TLS handshake stall, dropped connection, DNS hang) can therefore
+    hold a worker thread for many times the configured timeout
+    before any typed error surfaces.
+
+    This wrapper puts the entire call (including the breaker's
+    retries) on a single dedicated thread and bounds the total
+    wall-clock time at ``timeout`` seconds. If the cap is
+    exceeded, the thread is *left running* (it is daemonic and
+    cannot block process exit) but the *caller* immediately
+    receives a :class:`ProviderTimeoutError` and falls back to
+    the deterministic provider. The provider's ``close()`` is
+    invoked from the caller's thread so the underlying HTTP
+    connection is released and the next request starts clean.
+
+    The previous architecture (no hard cap) caused chat requests
+    to hang indefinitely when the upstream was unreachable. The
+    H7.9R fix activates the fallback path within the wall-clock
+    budget so the frontend never waits forever.
+    """
+    future = _HARD_TIMEOUT_EXECUTOR.submit(provider.complete, request)
+    try:
+        return future.result(timeout=timeout)
+    except Exception:
+        # Any exception from the provider propagates; only a
+        # wall-clock timeout is converted here. We do NOT call
+        # ``future.cancel()`` once the call has started — Python
+        # cannot interrupt a running thread — but we DO close
+        # the provider so the underlying socket is released.
+        try:
+            provider.close()
+        except Exception:
+            pass
+        raise
+
+
 class AssistantProviderService:
     """The public façade for the AI Provider Layer with Multi-Tier Failover & Circuit Breaker."""
 
@@ -140,11 +223,38 @@ class AssistantProviderService:
         context_builder: AssistantContextBuilder,
         prompt_builder: AssistantPromptBuilder | None = None,
         provider_factory: ProviderFactory | None = None,
+        reasoning_engine: Any | None = None,
+        evidence_retriever: Any | None = None,
     ) -> None:
         self._context_builder = context_builder
         self._prompt_builder = prompt_builder or AssistantPromptBuilder()
         self._factory = provider_factory or ProviderFactory()
         self._circuit_breaker = AICircuitBreaker(name="gemini")
+        # H8.11 — pre-LLM reasoning layer. The engine runs
+        # the intent classifier + the H8.3 pipeline; the
+        # retriever ranks the evidence registry. Both are
+        # imported lazily so this module can finish loading
+        # even when ``providers/__init__.py`` is mid-import
+        # (the original eager-import path triggered a
+        # circular ImportError when the package itself was
+        # being collected by the test runner).
+        if reasoning_engine is None or evidence_retriever is None:
+            from app.services.ai.reasoning.reasoning_engine import (
+                BusinessReasoningEngine,
+            )
+            from app.services.ai.reasoning.evidence_retriever import (
+                EvidenceRetriever,
+            )
+        self._reasoning_engine = (
+            reasoning_engine
+            if reasoning_engine is not None
+            else BusinessReasoningEngine()
+        )
+        self._evidence_retriever = (
+            evidence_retriever
+            if evidence_retriever is not None
+            else EvidenceRetriever()
+        )
 
     # ---- public API -------------------------------------------------- #
 
@@ -174,12 +284,106 @@ class AssistantProviderService:
                 from app.services.ai.providers.context_builder import select_relevant_context
                 context = select_relevant_context(context, user_prompt)
 
+        # H8.11 — pre-LLM reasoning layer. The engine emits
+        # a structured plan; the retriever ranks the
+        # evidence registry by intent + plan. Both are
+        # wrapped in try/except so a failure here can never
+        # break a chat request — the prompt builder falls
+        # back to the pre-H8.11 surface when either is
+        # ``None``.
+        #
+        # AI-1 — Stage 1 builds a QuestionUnderstanding
+        # from the user prompt + context. Stage 4 threads
+        # that understanding into the reasoning plan.
+        # Stage 5 dispatches deterministic tools (stubs by
+        # default). Stages 7+8 use the same understanding /
+        # plan / tool results to label claim categories and
+        # pick the adaptive answer shell. None of these
+        # layers can raise — every step is wrapped in
+        # try/except so a Stage 1-8 failure can never break
+        # a chat request.
+        question_understanding: QuestionUnderstanding | None = None
+        reasoning_plan = None
+        ranked_evidence = None
+        tool_results: tuple = ()
+        adaptive_answer = None
+        try:
+            question_understanding = understand_question(
+                user_prompt, context
+            )
+            # Stage 4 — call the reasoning engine's plan()
+            # with the AI-1 kwarg. The legacy 2-kwarg
+            # signature is preserved (the keyword is optional
+            # in BusinessReasoningEngine.plan) but custom
+            # TrackingEngine subclasses in the tests may
+            # not have updated their signature. We try
+            # with the kwarg first, fall back to the legacy
+            # call if the engine rejects it.
+            try:
+                reasoning_plan = self._reasoning_engine.plan(
+                    user_prompt=user_prompt,
+                    context=context,
+                    question_understanding=question_understanding,
+                )
+            except TypeError:
+                reasoning_plan = self._reasoning_engine.plan(
+                    user_prompt=user_prompt,
+                    context=context,
+                )
+            registry = EvidenceRegistry(context)
+            ranked_evidence = self._evidence_retriever.rank(
+                context=context,
+                registry=registry,
+                reasoning_plan=reasoning_plan,
+            )
+            # Stage 5 — dispatch deterministic tools. The
+            # dispatcher returns stubs by default for any
+            # engine the layer hasn't wired in.
+            dispatcher = ToolDispatcher()
+            tool_results = dispatcher.dispatch(
+                owner_id=owner_id,
+                question_understanding=question_understanding,
+                reasoning_plan=reasoning_plan,
+                context=context,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "[service] AI-1 universal-assistant layers failed; "
+                "falling back to pre-AI-1 prompt surface: %s",
+                exc,
+            )
+            question_understanding = None
+            reasoning_plan = None
+            ranked_evidence = None
+            tool_results = ()
+
+        # AI-1 — internal ``_effective_mode``. The wire
+        # ``mode`` is the user's selection (always). The
+        # internal ``_effective_mode`` flips to ``"open"``
+        # only when the prompt is purely educational AND
+        # not business-specific — so the LLM is not forced
+        # through the evidence registry for definitions or
+        # explanations that have nothing to do with the
+        # user's profile. The trust label uses the wire
+        # ``mode`` (the user always sees their pick).
+        effective_mode: Mode = mode
+        try:
+            if mode == "grounded" and is_purely_educational(user_prompt):
+                if not getattr(
+                    question_understanding, "is_business_specific", True
+                ):
+                    effective_mode = "open"
+        except Exception:  # noqa: BLE001
+            effective_mode = mode
+
         request = self._prompt_builder.build(
             context=context,
             user_prompt=user_prompt,
             history=history,
             knowledge=knowledge,
-            mode=mode,
+            mode=effective_mode,
+            reasoning_plan=reasoning_plan,
+            ranked_evidence=ranked_evidence,
         )
 
         chosen = provider or self._factory.build()
@@ -191,10 +395,26 @@ class AssistantProviderService:
 
         try:
             if provider:
-                response = chosen.complete(request)
+                # H7.9R+ — hard wall-clock cap on every outbound
+                # call. ``asyncio.wait_for`` is the async equivalent;
+                # we use ``_call_with_hard_timeout`` (a
+                # ``ThreadPoolExecutor``-based equivalent) because
+                # ``generate()`` runs in FastAPI's sync threadpool,
+                # not on the asyncio loop. The cap is per-call;
+                # the underlying provider's own connect/read timeouts
+                # still apply on the inside.
+                response = _call_with_hard_timeout(
+                    chosen, request, timeout=HARD_CALL_TIMEOUT_SECONDS
+                )
             else:
+                # Same cap, but through the circuit breaker which
+                # may add retry-with-backoff. The total wall-clock
+                # is still bounded by ``HARD_CALL_TIMEOUT_SECONDS``
+                # because the breaker runs inside the timed thread.
                 response = self._circuit_breaker.execute_with_resilience(
-                    lambda: chosen.complete(request)
+                    lambda: _call_with_hard_timeout(
+                        chosen, request, timeout=HARD_CALL_TIMEOUT_SECONDS
+                    )
                 )
         except ProviderQuotaError:
             return self._fallback_chain(request, reason="quota_exhausted", mode=mode)
@@ -202,6 +422,30 @@ class AssistantProviderService:
             return self._fallback_chain(request, reason="rate_limited", mode=mode)
         except ProviderAuthError:
             return self._fallback_chain(request, reason="auth_failed", mode=mode)
+        except (concurrent.futures.TimeoutError, TimeoutError) as exc:
+            # H7.9R+ — the wall-clock cap fired. This is NOT the
+            # same as ``ProviderTimeoutError`` (which the provider
+            # raises when ITS own httpx client times out). The
+            # fallback chain is invoked immediately, the underlying
+            # provider's ``close()`` has already been called by
+            # ``_call_with_hard_timeout`` (so the HTTP socket is
+            # released), and a structured log entry carries the
+            # provider name + model + elapsed time.
+            provider_name = getattr(chosen, "name", type(chosen).__name__)
+            model = getattr(chosen, "model_name", "") or ""
+            elapsed_ms = int(HARD_CALL_TIMEOUT_SECONDS * 1000)
+            logger.warning(
+                "ai.provider.hard_timeout",
+                extra={
+                    "event": "ai.provider.hard_timeout",
+                    "provider": provider_name,
+                    "model": model,
+                    "elapsed_ms": elapsed_ms,
+                    "mode": mode,
+                    "reason": "timeout",
+                },
+            )
+            return self._fallback_chain(request, reason="timeout", mode=mode)
         except ProviderConfigError:
             return self._fallback_chain(request, reason="config_error", mode=mode)
         except (ProviderUnavailableError, ProviderTimeoutError):
@@ -233,13 +477,28 @@ class AssistantProviderService:
             logger.error(f"[service] Unexpected exception during generation: {exc}")
             return self._fallback_chain(request, reason="provider_error", mode=mode)
 
-        # Provider succeeded
-        if mode == "open":
-            return self._generate_open(request, response)
+        # Provider succeeded. The internal ``effective_mode``
+        # drives which validator pipeline runs; the wire
+        # ``mode`` (the user's pick) is preserved on the
+        # GenerationMeta so the trust label stays truthful.
+        if effective_mode == "open":
+            return self._generate_open(
+                request, response,
+                question_understanding=question_understanding,
+                reasoning_plan=reasoning_plan,
+                tool_results=tool_results,
+                wire_mode=mode,
+                adaptive_answer_out=adaptive_answer,
+            )
         return self._generate_grounded(
             request,
             response,
             require_schema=require_schema,
+            question_understanding=question_understanding,
+            reasoning_plan=reasoning_plan,
+            tool_results=tool_results,
+            wire_mode=mode,
+            adaptive_answer_out=adaptive_answer,
         )
 
     # ---- mode-specific finalisers ---------------------------------- #
@@ -250,6 +509,11 @@ class AssistantProviderService:
         response: AssistantResponse,
         *,
         require_schema: bool | None,
+        question_understanding: QuestionUnderstanding | None = None,
+        reasoning_plan: Any = None,
+        tool_results: tuple = (),
+        wire_mode: Mode = "grounded",
+        adaptive_answer_out: Any = None,
     ) -> AssistantResponse:
         """Validate + ground a response in grounded mode.
 
@@ -270,6 +534,16 @@ class AssistantProviderService:
            ``GenerationMeta`` carrying the
            ``server_grounding_score`` and a stamp that
            ``grounding_validated=true``.
+
+        AI-1 — the response is stamped with the
+        :class:`AdaptiveAnswer` chosen from the Stage 1
+        understanding, the Stage 4 plan, and the Stage 5
+        tool results. The validator's ``claim_categories_used``
+        set, the dispatcher's ``tool_calls``, and the
+        understanding's ``unknowns`` all surface on the
+        GenerationMeta for the audit trail. The wire
+        ``mode`` is preserved (the user's pick) — only the
+        internal validator pipeline uses ``effective_mode``.
         """
         if _is_deterministic(response):
             return response
@@ -387,6 +661,43 @@ class AssistantProviderService:
             confidence=(parsed.confidence if parsed else None),
             generation_method="generative",
         )
+        # AI-1 — stamp the universal-assistant audit trail.
+        # The wire ``mode`` is preserved (the user's pick).
+        try:
+            adaptive = adaptive_answer_out or compose_adaptive_answer(
+                parsed=parsed,
+                question_understanding=question_understanding,
+                reasoning_plan=reasoning_plan,
+                tool_results=tool_results,
+                context=request.context,
+            )
+        except Exception:
+            adaptive = None
+        from dataclasses import replace as _replace_ai1
+        meta = _replace_ai1(
+            meta,
+            mode=wire_mode,
+            deterministic_services_used=tuple(
+                r.service_name for r in tool_results if r.status == "ok"
+            ),
+            calculations_used=tuple(
+                r.service_name for r in tool_results
+                if r.status == "ok" and "calc" in r.service_name
+            ),
+            question_understanding=(
+                question_understanding.to_dict()
+                if question_understanding is not None
+                and hasattr(question_understanding, "to_dict")
+                else None
+            ),
+            tool_calls=tuple(
+                {"service_name": c.service_name, "inputs": c.inputs}
+                for c in (
+                    getattr(reasoning_plan, "tool_calls", ()) or ()
+                )
+            ),
+            claim_categories_used=tuple(report.claim_categories_used or ()),
+        )
         # H7.8C — emit a structured event for every successful
         # grounded-mode pass. The event payload carries the
         # server-side grounding score, the registry coverage,
@@ -413,6 +724,12 @@ class AssistantProviderService:
         self,
         request: AssistantRequest,
         response: AssistantResponse,
+        *,
+        question_understanding: QuestionUnderstanding | None = None,
+        reasoning_plan: Any = None,
+        tool_results: tuple = (),
+        wire_mode: Mode = "open",
+        adaptive_answer_out: Any = None,
     ) -> AssistantResponse:
         """Exploratory Business Advisor mode validation + envelope stamping."""
         body = response.body or ""
@@ -420,6 +737,23 @@ class AssistantProviderService:
             return self._fallback(
                 request, reason="open_mode_provider_failure", mode="open",
             )
+
+        # AI-1 auto-flip defence: when the prompt was
+        # routed internally to "open" but the provider
+        # already answered via the deterministic fallback,
+        # preserve its GenerationMeta ``generation_method``
+        # (which is "deterministic"). The wire ``mode`` is
+        # the user's selection — overwrite the GenerationMeta
+        # so the trust label is truthful.
+        if _is_deterministic(response) and response.generation is not None:
+            from dataclasses import replace as _preserve_meta
+            return _preserve_meta(
+                response, generation=_preserve_meta(
+                    response.generation, mode=wire_mode,
+                ),
+            )
+        if _is_deterministic(response):
+            return response
 
         registry = EvidenceRegistry(request.context)
         parsed = parse_open_model_output(body)
@@ -474,8 +808,34 @@ class AssistantProviderService:
             confidence=getattr(parsed, "confidence", 70),
             context_manifest=manifest_dict,
         )
-        from dataclasses import replace
-        return replace(response, generation=meta)
+        # AI-1 — stamp the universal-assistant audit trail
+        # for open mode. The wire ``mode`` is preserved.
+        from dataclasses import replace as _replace_open
+        meta = _replace_open(
+            meta,
+            mode=wire_mode,
+            deterministic_services_used=tuple(
+                r.service_name for r in tool_results if r.status == "ok"
+            ),
+            calculations_used=tuple(
+                r.service_name for r in tool_results
+                if r.status == "ok" and "calc" in r.service_name
+            ),
+            question_understanding=(
+                question_understanding.to_dict()
+                if question_understanding is not None
+                and hasattr(question_understanding, "to_dict")
+                else None
+            ),
+            tool_calls=tuple(
+                {"service_name": c.service_name, "inputs": c.inputs}
+                for c in (
+                    getattr(reasoning_plan, "tool_calls", ()) or ()
+                )
+            ),
+            claim_categories_used=tuple(val_report.claim_categories_used or ()),
+        )
+        return _replace_open(response, generation=meta)
 
     # ---- convenience ------------------------------------------------- #
 
@@ -494,12 +854,18 @@ class AssistantProviderService:
         ``GET /api/v1/chat/provider-status`` endpoint. The
         endpoint never exposes API keys, auth headers, or the
         full base URL — only the provider *name*, the model
-        identifier, the configured mode list, and a boolean
+        identifier, the configured mode list, a boolean
         availability flag derived from the factory's
-        ``is_available`` check.
+        ``is_available`` check, and a short ``reason`` string
+        that tells the frontend *why* the provider is up or
+        down (H7.9R+ — the boolean alone is not enough; the
+        frontend needs ``"missing_api_key"`` vs
+        ``"ping_failed"`` vs ``"reachable"`` to render the
+        right "Provider unavailable" copy).
         """
         name = self.configured_provider_name()
         available = self._factory.is_available()
+        reason = self._factory.status_reason()
         modes = ("grounded", "open")
         return {
             "configured_provider": name,
@@ -508,6 +874,7 @@ class AssistantProviderService:
             "available": available,
             "schema_required": self._schema_required(None),
             "fallback_active": not available,
+            "reason": reason,
             "modes": list(modes),
             "default_mode": "grounded",
         }

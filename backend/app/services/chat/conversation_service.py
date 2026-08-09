@@ -427,7 +427,48 @@ def _message_payload(msg) -> dict:
                 generation = parsed
     except (json.JSONDecodeError, ValueError):
         generation = None
-    return {
+
+    # H7.8C — flatten the brief-mandated provenance fields to
+    # the TOP level of the message payload. The frontend trust
+    # disclosure (provider, model, runtime provider, grounding
+    # score, evidence references, assumptions, limitations,
+    # fallback active, mode, confidence) is now reachable
+    # without parsing the ``generation`` block. All fields are
+    # safe defaults so user turns and legacy rows remain
+    # parseable.
+    #
+    # Source of truth priority: the live ``generation`` block
+    # is authoritative. The pydantic ``ChatMessageOut`` schema
+    # accepts the top-level fields verbatim — the brief value
+    # is propagated and the ``generation`` block is kept for
+    # any client that already reads it.
+    fallback_used_flag = bool(getattr(msg, "fallback_used", False))
+    gen_provider = str((generation or {}).get("provider") or "")
+    gen_model = str((generation or {}).get("model") or "")
+    gen_runtime_provider = str((generation or {}).get("runtime_provider") or gen_provider)
+    gen_mode = (generation or {}).get("mode")
+    gen_grounding_score = int((generation or {}).get("server_grounding_score") or 0)
+    gen_evidence_refs = list((generation or {}).get("evidence_references") or [])
+    gen_assumptions = list((generation or {}).get("assumptions") or [])
+    gen_limitations = list((generation or {}).get("limitations") or [])
+    gen_confidence = (generation or {}).get("confidence")
+    # AI-1 — universal-assistant audit-trail fields surfaced
+    # at the top level for the frontend trust disclosure. Each
+    # default is a safe empty so user turns + legacy rows remain
+    # parseable.
+    gen_deterministic_services = list(
+        (generation or {}).get("deterministic_services_used") or []
+    )
+    gen_calculations_used = list(
+        (generation or {}).get("calculations_used") or []
+    )
+    gen_question_understanding = (generation or {}).get("question_understanding")
+    gen_tool_calls = list((generation or {}).get("tool_calls") or [])
+    gen_claim_categories = list(
+        (generation or {}).get("claim_categories_used") or []
+    )
+
+    payload = {
         "id": int(msg.id),
         "role": str(msg.role),
         "kind": str(msg.kind or ""),
@@ -436,12 +477,43 @@ def _message_payload(msg) -> dict:
         "created_at": _iso(msg.created_at),
         # H7.8A P2 — per-message fallback flag surfaced to the
         # frontend so MessageBubble can render the right trust label.
-        "fallback_used": bool(getattr(msg, "fallback_used", False)),
+        "fallback_used": fallback_used_flag,
         # H7.8C — full provenance envelope. Always present on
         # assistant turns; None for user turns (the user has no
         # generation metadata).
         "generation": generation,
+        # H7.8C — flat mirrors of the provenance envelope.
+        # The frontend can render the trust disclosure from
+        # these top-level fields without drilling into
+        # ``generation.*``. Backward-compatible: every
+        # field has a safe default so old clients still
+        # parse.
+        "provider": gen_provider,
+        "model": gen_model,
+        "runtime_provider": gen_runtime_provider,
+        "grounding_score": gen_grounding_score,
+        "evidence_references": gen_evidence_refs,
+        "assumptions": gen_assumptions,
+        "limitations": gen_limitations,
+        "fallback_active": fallback_used_flag,
+        "mode": gen_mode,
+        "confidence": gen_confidence,
+        # AI-1 — universal-assistant audit-trail mirrors at the
+        # top level of the wire payload.
+        "deterministic_services_used": gen_deterministic_services,
+        "calculations_used": gen_calculations_used,
+        "question_understanding": gen_question_understanding,
+        "tool_calls": gen_tool_calls,
+        "claim_categories_used": gen_claim_categories,
     }
+    # H7.8C — leak guard. The serializer must never emit a
+    # field name from the brief-mandated secret set
+    # (``api_key``, ``authorization``, ``base_url``, etc.).
+    # The audit fix changed the provider layer to never
+    # include them; this guard catches any future regression
+    # at the projection boundary.
+    _assert_no_leaked_secrets(payload, where="_message_payload")
+    return payload
 
 
 def _session_summary(session) -> dict:
@@ -482,12 +554,74 @@ def _iso(value: Any) -> str:
     return str(value)
 
 
+# H7.8C — the brief-mandated list of fields that must NEVER
+# appear in a wire payload. The service layer asserts this set
+# is disjoint from every payload it emits. Adding a new
+# sensitive key here is a non-breaking change (it just adds
+# another field to the leak guard). Removing a key is a
+# breaking change for the audit trail.
+_LEAKED_FIELDS = frozenset(
+    {
+        "api_key",
+        "authorization",
+        "auth_header",
+        "base_url",
+        "upstream_url",
+        "secret",
+        "bearer",
+        "access_token",
+    }
+)
+
+
+def _assert_no_leaked_secrets(payload: dict | None, *, where: str) -> None:
+    """Raise ``ValueError`` if ``payload`` contains any key in
+    :data:`_LEAKED_FIELDS`.
+
+    H7.8C — the brief mandates that the assistant response
+    NEVER exposes API keys, authorization headers, or base
+    URLs. The audit-fixed provider layer never includes these
+    fields, but a future refactor could accidentally paste a
+    config dict into the payload. This guard catches that
+    regression at the projection boundary, in the same place
+    that fixes the brief, so any future change is forced to
+    think about the leak surface.
+
+    Parameters
+    ----------
+    payload:
+        The dict the serializer is about to emit (either the
+        ``generation`` envelope or the top-level message
+        payload). ``None`` is a no-op.
+    where:
+        Short label used in the error message so the audit
+        log knows which surface leaked.
+    """
+    if not payload:
+        return
+    leaked = set(payload.keys()) & _LEAKED_FIELDS
+    if leaked:
+        raise ValueError(
+            f"H7.8C leak guard tripped at {where}: "
+            f"refusing to serialise payload containing "
+            f"secrets: {sorted(leaked)!r}"
+        )
+
+
 def _generation_meta_to_payload(meta) -> dict | None:
     """Project a :class:`GenerationMeta` dataclass into a JSON-safe dict.
 
     Returns ``None`` when the provider did not stamp a
     ``GenerationMeta`` (e.g. the legacy mock-provider path).
     Tuples become lists so ``json.dumps`` round-trips cleanly.
+
+    H7.8C — ``runtime_provider`` is filled from ``provider``
+    when the dataclass did not stamp it explicitly. The
+    short-circuit keeps the field always-present on the wire
+    so the frontend can rely on it without checking for
+    ``None``. The leak guard runs before returning so any
+    future regression that pulls a config dict into the
+    envelope is caught at the boundary.
     """
     if meta is None:
         return None
@@ -500,6 +634,13 @@ def _generation_meta_to_payload(meta) -> dict | None:
     for key, value in list(out.items()):
         if isinstance(value, tuple):
             out[key] = list(value)
+    # H7.8C — default runtime_provider to provider when the
+    # upstream didn't set it. A real provider path always
+    # sets it explicitly; the deterministic fallback path
+    # leaves it empty so this default kicks in.
+    if not out.get("runtime_provider"):
+        out["runtime_provider"] = out.get("provider") or ""
+    _assert_no_leaked_secrets(out, where="_generation_meta_to_payload")
     return out
 
 

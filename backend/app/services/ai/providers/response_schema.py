@@ -268,7 +268,7 @@ class GroundedResponse:
             lines.append("")
 
         if self.scheme_matches:
-            lines.append("### SCHEME PROFILE MATCHES")
+            lines.append("### 9. GOVERNMENT SCHEME MATCHES")
             for i, sm in enumerate(self.scheme_matches, start=1):
                 lines.append(
                     f"  {i}. [{sm.scheme_ref}] {sm.match_explanation}"
@@ -287,10 +287,9 @@ class GroundedResponse:
                 lines.append(f"  - {l}")
             lines.append("")
 
+        lines.append("### 10. CONFIDENCE & GROUNDING SCORE")
         if self.server_grounding_score is not None:
-            lines.append(
-                f"### 9. CONFIDENCE & GROUNDING SCORE\nServer grounding score: {self.server_grounding_score}/100"
-            )
+            lines.append(f"Server grounding score: {self.server_grounding_score}/100")
         lines.append(f"Model confidence: {self.confidence}/100")
         return "\n".join(lines).rstrip()
 

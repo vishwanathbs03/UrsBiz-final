@@ -57,6 +57,11 @@ from app.services.ai.providers.response_schema import (
     Recommendation,
     SchemeMatch,
 )
+from app.services.ai.reasoning.claim_categories import (
+    CATEGORY_LABELS,
+    ClaimCategory,
+    categorize_claim,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -269,6 +274,12 @@ class GroundingReport:
     passed: bool
     threshold: int
     score_breakdown: dict[str, int] = field(default_factory=dict)
+    # AI-1 — the deduped tuple of :data:`ClaimCategory` labels
+    # the validator observed in the response. Defaults to an
+    # empty tuple for legacy callers. The audit trail reads
+    # this field when generating the ``claim_categories_used``
+    # wire field.
+    claim_categories_used: tuple[str, ...] = field(default_factory=tuple)
 
 
 class GroundingValidator:
@@ -346,7 +357,14 @@ class GroundingValidator:
         errors.extend(self._rule_coverage_threshold())
 
         breakdown = self._compute_breakdown(errors)
+        # AI-1 — append category-rule contributions to the
+        # breakdown additively. Each fired category rule adds
+        # a small positive score; the total is still clamped
+        # to ``[0, _MAX_SCORE]`` by ``_clamp_score`` at the end.
+        categories_observed = self._collect_categories()
+        breakdown = self._append_category_breakdown(breakdown, categories_observed)
         score = sum(breakdown.values())
+        score = max(0, min(_MAX_SCORE, score))
         passed = not errors and score >= self._threshold
         return GroundingReport(
             errors=tuple(errors),
@@ -354,6 +372,7 @@ class GroundingValidator:
             passed=passed,
             threshold=self._threshold,
             score_breakdown=breakdown,
+            claim_categories_used=categories_observed,
         )
 
     # ---- rule implementations ---------------------------------------- #
@@ -684,6 +703,80 @@ class GroundingValidator:
         }
         return breakdown
 
+    # ---- AI-1 category helpers --------------------------------------- #
+
+    def _collect_categories(self) -> tuple[str, ...]:
+        """Return the deduped tuple of :class:`ClaimCategory` labels the response contains.
+
+        The categories are derived from the parsed response's
+        :class:`ExecutiveSummary` text, every :class:`KeyFinding`
+        text, and every :class:`Recommendation` action. The
+        order is the priority order of :data:`CATEGORY_LABELS`
+        so the wire field is stable.
+        """
+        if self._response is None:
+            return ()
+        observed: list[str] = []
+        seen: set[str] = set()
+
+        def _record(text: str) -> None:
+            cat = categorize_claim(text or "")
+            if cat not in seen and cat in CATEGORY_LABELS:
+                seen.add(cat)
+                observed.append(cat)
+
+        response = self._response
+        # The executive_summary field is a plain ``str`` per
+        # :class:`GroundedResponse`'s dataclass shape, but
+        # earlier revisions exposed it as an
+        # :class:`ExecutiveSummary` dataclass with a ``text``
+        # attribute. Handle both shapes.
+        exec_summary = getattr(response, "executive_summary", None)
+        if exec_summary is not None:
+            if isinstance(exec_summary, str):
+                _record(exec_summary)
+            else:
+                _record(getattr(exec_summary, "text", ""))
+        for finding in getattr(response, "key_findings", ()) or ():
+            _record(getattr(finding, "statement", "") or getattr(finding, "text", ""))
+        for rec in getattr(response, "recommendations", ()) or ():
+            # ``Recommendation.action`` (legacy) vs
+            # ``Recommendation.rationale`` (current).
+            _record(
+                getattr(rec, "action", "")
+                or getattr(rec, "rationale", "")
+                or getattr(rec, "title", "")
+            )
+        for plan_item in getattr(response, "plan_items", ()) or ():
+            _record(getattr(plan_item, "title", "") or "")
+        # Final dedupe by priority order
+        ordered: list[str] = []
+        for cat in CATEGORY_LABELS:
+            if cat in observed and cat not in ordered:
+                ordered.append(cat)
+        return tuple(ordered)
+
+    def _append_category_breakdown(
+        self,
+        breakdown: dict[str, int],
+        categories: tuple[str, ...],
+    ) -> dict[str, int]:
+        """Append one breakdown entry per observed :class:`ClaimCategory`.
+
+        Each category contributes a positive score (1..3) so the
+        additive contract is preserved. The total is clamped
+        by the caller at ``[0, _MAX_SCORE]``.
+        """
+        result = dict(breakdown)
+        for cat in categories:
+            # Each category gets 1 point. Categories appear at
+            # most once even when multiple claims share the
+            # label.
+            result[f"category_{cat.lower()}"] = result.get(
+                f"category_{cat.lower()}", 0
+            ) + 1
+        return result
+
 
 # --------------------------------------------------------------------------- #
 # Text helpers
@@ -712,6 +805,9 @@ class OpenValidationReport:
     score: int
     errors: tuple[str, ...] = field(default_factory=tuple)
     business_evidence_validated: bool = False
+    # AI-1 — the deduped tuple of :class:`ClaimCategory` labels
+    # observed in the open-mode response. Defaults to ``()``.
+    claim_categories_used: tuple[str, ...] = field(default_factory=tuple)
 
 
 class OpenResponseValidator:
@@ -769,9 +865,61 @@ class OpenResponseValidator:
         score = max(0, 100 - len(errors) * 25)
         passed = len(errors) == 0
 
+        # AI-1 — capture the categories observed in the raw
+        # body so the audit trail records what kinds of
+        # claims the open-mode model made.
+        observed = _categorize_open_body(text_body)
+
         return OpenValidationReport(
             passed=passed,
             score=score,
             errors=tuple(errors),
             business_evidence_validated=passed and evidence_validated,
+            claim_categories_used=observed,
         )
+
+
+# --------------------------------------------------------------------------- #
+# AI-1 — open-mode categorisation helper
+# --------------------------------------------------------------------------- #
+
+
+def _categorize_open_body(text_body: str) -> tuple[str, ...]:
+    """Return the deduped categories the open-mode body contains.
+
+    The open-mode validator runs against the raw body string
+    (the parsed response is loose — section headers may be
+    present). We sample the body in two halves (executive
+    summary + closing) and dedupe in
+    :data:`CATEGORY_LABELS` priority order.
+    """
+    if not text_body:
+        return ()
+    half = max(120, len(text_body) // 4)
+    head = text_body[:half]
+    tail = text_body[-half:]
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for cat in CATEGORY_LABELS:
+        if cat in seen:
+            continue
+        if cat == "FACT" and any(kw in text_body.lower() for kw in (
+            "your revenue is", "your score is", "your business", "you have",
+            "your target", "your industry",
+        )):
+            seen.add(cat)
+            ordered.append(cat)
+        elif cat == "RECOMMENDATION" and any(kw in text_body.lower() for kw in (
+            "i recommend", "you should", "next step", "consider",
+            "we suggest", "first step",
+        )):
+            seen.add(cat)
+            ordered.append(cat)
+        elif cat == "SCENARIO" and any(kw in text_body.lower() for kw in (
+            "if you", "scenario", "what if", "suppose",
+            "best case", "worst case", "would become",
+        )):
+            seen.add(cat)
+            ordered.append(cat)
+    _ = head, tail  # sampled but not currently used beyond length
+    return tuple(ordered)

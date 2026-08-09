@@ -105,7 +105,13 @@ class OpenAICompatibleProvider:
         self._base_url = (base_url or "").rstrip("/")
         self._model = (model or "").strip()
         self._api_key = api_key or ""
-        self._timeout = float(timeout) if timeout and timeout > 0 else 60.0
+        # Defense in depth: cap any caller-supplied timeout at 30s
+        # so a single chat call can never hold a worker thread for
+        # more than half a minute. The httpx client uses this value
+        # directly for both connect and read timeouts. Callers that
+        # pass timeout=0 / None fall back to the 60s default before
+        # clamping (so the floor is preserved).
+        self._timeout = min(float(timeout) if timeout and timeout > 0 else 60.0, 30.0)
         self._require_json = bool(require_json)
         self._owns_client = http_client is None
         self._client = http_client or httpx.Client(timeout=self._timeout)

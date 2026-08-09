@@ -168,6 +168,14 @@ class ChatGenerationMeta(BaseModel):
 
     provider: str = Field(min_length=1, max_length=80)
     model: str = Field(min_length=1, max_length=120)
+    runtime_provider: str = Field(default="", max_length=80)
+    """H7.8C — the runtime provider that actually answered the
+    request. Equal to ``provider`` for the deterministic
+    fallback path; equal to ``provider`` for any real call.
+    The field is differentiated from ``provider`` so the wire
+    payload can carry it even when the configured provider name
+    and the runtime provider name diverge. Defaults to ``""``
+    for legacy rows that pre-date H7.8C."""
     mode: Literal["grounded", "open"] = "grounded"
     fallback_used: bool
     fallback_reason: Literal[
@@ -200,6 +208,17 @@ class ChatGenerationMeta(BaseModel):
     business_evidence_validated: bool = False
     context_manifest: dict | None = None
 
+    # AI-1 — universal-assistant audit trail fields. Mirrors
+    # of the GenerationMeta dataclass fields. Each new field
+    # has a safe default so legacy rows deserialize cleanly.
+    # The Pydantic ``extra="forbid"`` config would otherwise
+    # reject these when the persistence layer emits them.
+    deterministic_services_used: list[str] = Field(default_factory=list)
+    calculations_used: list[str] = Field(default_factory=list)
+    question_understanding: dict | None = None
+    tool_calls: list[dict] = Field(default_factory=list)
+    claim_categories_used: list[str] = Field(default_factory=list)
+
 
 # --------------------------------------------------------------------------- #
 # Messages
@@ -207,7 +226,29 @@ class ChatGenerationMeta(BaseModel):
 
 
 class ChatMessageOut(BaseModel):
-    """One message in a conversation. Returned by GET /chat/{id}."""
+    """One message in a conversation. Returned by GET /chat/{id}.
+
+    H7.8C — assistant responses now expose the full provenance
+    envelope at the TOP level of the message payload, not only
+    nested inside ``generation``. Every brief-mandated field
+    (provider, model, runtime provider, grounding score,
+    evidence references, assumptions, limitations, fallback
+    active, mode, confidence) is now a top-level field on this
+    model so the frontend can render the trust disclosure without
+    drilling into ``generation.*``.
+
+    Backward compatibility
+    -----------------------
+
+    * All new fields are **optional** (defaulting to safe
+      empties) so older clients that only read ``id``,
+      ``role``, ``content`` still parse the response.
+    * The ``generation`` block is preserved unchanged for any
+      client that already reads it.
+    * User turns and legacy rows that pre-date the
+      ``generation_meta_json`` column return the new fields as
+      empty / ``None`` — exactly the same contract v1 had.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -230,6 +271,103 @@ class ChatMessageOut(BaseModel):
     # on user turns and on legacy rows that pre-date the
     # ``generation_meta_json`` column.
     generation: ChatGenerationMeta | None = None
+
+    # ---- H7.8C — top-level provenance fields ------------------------- #
+    #
+    # Every field below is a flat mirror of the matching
+    # ``generation.*`` value. The frontend trust disclosure
+    # (provider name, model, grounding score, evidence count,
+    # assumptions, limitations, mode, confidence, fallback
+    # active) is now reachable without parsing the
+    # ``generation`` block.
+    #
+    # The mirrors are NEVER derived from a hidden source — they
+    # are read from the same ``GenerationMeta`` the assistant
+    # layer stamps on every reply. If a mirror disagrees with
+    # ``generation.*`` the renderer should prefer ``generation``
+    # (the structured envelope is the authoritative source).
+
+    provider: str = Field(default="", max_length=80)
+    """The model-side ``provider`` field. ``"deterministic-fallback"``
+    when the deterministic fallback answered; ``"openai_compatible"``
+    / ``"ollama"`` when a real provider answered."""
+
+    model: str = Field(default="", max_length=120)
+    """The model identifier the provider stamped on the response."""
+
+    runtime_provider: str = Field(default="", max_length=80)
+    """H7.8C — the runtime provider that actually answered the
+    request. Equal to ``provider`` for the deterministic
+    fallback path; equal to ``provider`` for any real call
+    (the value is differentiated from ``provider`` so the
+    frontend can render the "trusted runtime" badge
+    separately from the "configured provider" label)."""
+
+    grounding_score: int = Field(default=0, ge=0, le=100)
+    """The server-computed grounding score (0–100). Mirrors
+    ``generation.server_grounding_score``. The deterministic
+    fallback always reports 100 (grounded by construction);
+    a real provider's score reflects how many data sources
+    the answer cited."""
+
+    evidence_references: list[str] = Field(default_factory=list)
+    """Mirrors ``generation.evidence_references`` — the list
+    of Evidence Registry IDs the answer cited."""
+
+    assumptions: list[str] = Field(default_factory=list)
+    """Mirrors ``generation.assumptions`` — the assumptions the
+    provider / fallback surfaced with the answer."""
+
+    limitations: list[str] = Field(default_factory=list)
+    """Mirrors ``generation.limitations`` — the limitations the
+    provider / fallback surfaced with the answer."""
+
+    fallback_active: bool = False
+    """H7.8C — same semantic as ``fallback_used`` but exposed
+    under the brief-mandated name. Always equals ``fallback_used``
+    on this message (kept as a separate field so the frontend
+    can branch on either name)."""
+
+    mode: Literal["grounded", "open"] | None = None
+    """The mode the assistant ran under. ``None`` for user turns
+    and for legacy rows that pre-date the column."""
+
+    confidence: int | None = Field(default=None, ge=0, le=100)
+    """Mirrors ``generation.confidence`` — the provider's
+    self-reported confidence (0–100). ``None`` when the
+    provider did not emit one (the deterministic fallback
+    fills it with the configured value)."""
+
+    # AI-1 — universal-assistant audit trail mirrors. Each
+    # field mirrors the matching ``generation.*`` value so
+    # the frontend trust disclosure can render the dispatch
+    # + claim-category + understanding audit without parsing
+    # the structured envelope. All default to safe empties.
+    deterministic_services_used: list[str] = Field(default_factory=list)
+    """Mirrors ``generation.deterministic_services_used`` —
+    the deterministic engines the ToolDispatcher invoked
+    during this turn."""
+
+    calculations_used: list[str] = Field(default_factory=list)
+    """Mirrors ``generation.calculations_used`` — the
+    deterministic calc names whose authoritative output the
+    LLM was shown."""
+
+    question_understanding: dict | None = None
+    """Mirrors ``generation.question_understanding`` — the
+    Stage 1 QuestionUnderstanding dict the universal-assistant
+    layer produced for this turn. ``None`` when no
+    understanding was produced (legacy callers)."""
+
+    tool_calls: list[dict] = Field(default_factory=list)
+    """Mirrors ``generation.tool_calls`` — the ToolCall
+    tuples the dispatcher selected, as a list of dicts."""
+
+    claim_categories_used: list[str] = Field(default_factory=list)
+    """Mirrors ``generation.claim_categories_used`` — the
+    claim-category labels the validator observed on the
+    LLM's prose (FACT/CALCULATION/INFERENCE/RECOMMENDATION/
+    SCENARIO/EXTERNAL_FACT/UNKNOWN)."""
 
 
 # --------------------------------------------------------------------------- #
@@ -338,6 +476,11 @@ class ChatProviderStatusResponse(BaseModel):
     provider *name*, the configured *model*, whether the
     provider is reachable *now*, and the list of supported
     *modes* — enough for the header dot and the mode toggle.
+
+    H7.9R+ — ``reason`` carries a frontend-safe string that
+    explains *why* the boolean is what it is. The frontend
+    branches on it to render "Provider unavailable" vs
+    "Missing API key" vs "Reachable" without parsing logs.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -348,5 +491,13 @@ class ChatProviderStatusResponse(BaseModel):
     available: bool
     schema_required: bool
     fallback_active: bool
+    reason: Literal[
+        "reachable",
+        "missing_api_key",
+        "missing_base_url",
+        "ping_failed",
+        "placeholder",
+        "provider_unconfigured",
+    ] = "provider_unconfigured"
     modes: list[Literal["grounded", "open"]] = Field(default_factory=list)
     default_mode: Literal["grounded", "open"] = "grounded"

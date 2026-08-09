@@ -45,6 +45,7 @@ from app.services.ai.providers.base import (
     BusinessContextManifest,
     ReportSummary,
 )
+from app.services.ai.providers.intent_router import QuestionIntent, classify_intent
 
 
 # Cap on how many records the LLM sees per source. Long
@@ -62,6 +63,35 @@ _MAX_FORECASTS = 4
 _MAX_ACTION_ITEMS = 6
 _MAX_ANALYTICS = 10
 _MAX_REPORTS = 5
+
+# AI-1 — context-priority mapping: which categories each
+# flagship intent boosts. The first element wins ties. The
+# context builder uses this to order the prompt's category
+# sections, ensuring the most pertinent slice is surfaced first.
+_INTENT_CATEGORY_PRIORITY: dict[QuestionIntent, tuple[str, ...]] = {
+    QuestionIntent.REACH_REVENUE_TARGET: (
+        "business_profile", "recommendations", "roadmap",
+        "forecasts", "rules", "readiness_scores",
+    ),
+    QuestionIntent.BIGGEST_WEAKNESS: (
+        "rules", "insights", "readiness_scores",
+        "recommendations", "business_profile",
+    ),
+    QuestionIntent.GOVERNMENT_SCHEMES: (
+        "scheme_matches", "business_profile",
+    ),
+    QuestionIntent.TWELVE_MONTH_ROADMAP: (
+        "roadmap", "recommendations", "analytics",
+    ),
+    QuestionIntent.EXPORT_EXPANSION: (
+        "business_profile", "export_history", "certifications",
+        "recommendations", "rules",
+    ),
+    QuestionIntent.GENERAL: (
+        "business_profile", "recommendations",
+        "readiness_scores", "rules",
+    ),
+}
 
 
 class AssistantContextBuilder:
@@ -774,6 +804,90 @@ def select_relevant_context(
         business_context_used=tuple(categories),
         records_used=records,
         prompt_truncated=False,
+        # AI-1 — audit trail for context selection. The
+        # pre-truncation snapshot is the same as the post-
+        # truncation snapshot today (no truncation in the
+        # builder) but the fields exist for future RAG
+        # tuning and for the explainability dashboard.
+        categories_available=tuple(categories),
+        categories_used=tuple(categories),
+        records_available=records,
+        evidence_ids_used=tuple(_collect_kg_evidence_ids(kg)),
+        context_priority=_compute_context_priority(tuple(categories), user_prompt),
+        context_selection_reason=_compute_selection_reason(
+            tuple(categories), user_prompt
+        ),
     )
 
     return replace(context, context_manifest=manifest, knowledge_graph=kg)
+
+
+def _collect_kg_evidence_ids(kg: Any) -> tuple[str, ...]:
+    """Return the deduplicated set of ``evidence_id``s from the knowledge graph.
+
+    Falls back gracefully when the KG is malformed — never
+    raises.
+    """
+    if kg is None:
+        return ()
+    nodes = getattr(kg, "nodes", None) or []
+    seen: set[str] = set()
+    out: list[str] = []
+    for node in nodes:
+        eid = getattr(node, "evidence_id", None) if not isinstance(node, dict) else node.get("evidence_id")
+        if not eid:
+            continue
+        if eid in seen:
+            continue
+        seen.add(eid)
+        out.append(eid)
+    return tuple(out)
+
+
+def _compute_context_priority(
+    categories: tuple[str, ...], user_prompt: str
+) -> tuple[str, ...]:
+    """Order categories by relevance to the user prompt.
+
+    The intent classifier picks a priority template; the
+    builder then orders the available categories accordingly.
+    Categories not present in the template are appended at
+    the end in their original order, so the result is always
+    a permutation of the input.
+    """
+    if not categories:
+        return ()
+    intent = classify_intent(user_prompt or "")
+    template = _INTENT_CATEGORY_PRIORITY.get(
+        intent, _INTENT_CATEGORY_PRIORITY[QuestionIntent.GENERAL]
+    )
+    available_set = set(categories)
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for cat in template:
+        if cat in available_set and cat not in seen:
+            ordered.append(cat)
+            seen.add(cat)
+    for cat in categories:
+        if cat not in seen:
+            ordered.append(cat)
+            seen.add(cat)
+    return tuple(ordered)
+
+
+def _compute_selection_reason(
+    categories: tuple[str, ...], user_prompt: str
+) -> str:
+    """One-line explanation of why these categories were selected.
+
+    The reason is informational — surfaced on the audit trail
+    so reviewers can answer "why was this slice included /
+    excluded?". The format is stable so it can be matched in
+    tests:
+
+      * "intent=<intent>; categories=<n>"
+    """
+    intent = classify_intent(user_prompt or "")
+    return (
+        f"intent={intent.value}; categories={len(categories)}"
+    )
