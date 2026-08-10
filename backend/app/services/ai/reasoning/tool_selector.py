@@ -235,6 +235,15 @@ _EXPECTED_OUTPUT_SHAPES: dict[str, str] = {
     "business_dna": "dna:DnaProfile",
     "risk": "rules:list[Rule]",
     "insights": "insights:list[Insight]",
+    # SPRINT AI-2 — 8 additional service names.
+    "opportunity": "opportunities:list[Opportunity]",
+    "readiness": "readiness:ReadinessReport",
+    "kpi": "kpis:list[Kpi]",
+    "benchmark": "benchmarks:dict",
+    "growth": "growth:dict",
+    "funding": "funding:dict",
+    "compliance": "compliance:dict",
+    "predictive_sprint14": "predictions:{revenue,growth,risk}",
 }
 
 
@@ -265,7 +274,13 @@ class ToolDispatcher:
 
     def __init__(self) -> None:
         self._tools: dict[str, ToolInterface] = {}
-        # Default registry is all stubs.
+        # Default registry is all stubs. SPRINT AI-2 replaces
+        # these with real wrappers at the chat endpoint — the
+        # production wiring lives in
+        # ``app.api.v1.endpoints.chat._service(db)``. The
+        # default stub registry keeps AI-1 tests green and
+        # makes the dispatcher safe to instantiate without any
+        # DB session (e.g. in unit tests).
         self.register_tool("health_score", StubToolInterface())
         self.register_tool("recommendation", StubToolInterface())
         self.register_tool("schemes_sprint16", StubToolInterface())
@@ -274,6 +289,16 @@ class ToolDispatcher:
         self.register_tool("business_dna", StubToolInterface())
         self.register_tool("risk", StubToolInterface())
         self.register_tool("insights", StubToolInterface())
+        # SPRINT AI-2 — 8 additional service names that the
+        # chat endpoint will wire to real engines.
+        self.register_tool("opportunity", StubToolInterface())
+        self.register_tool("readiness", StubToolInterface())
+        self.register_tool("kpi", StubToolInterface())
+        self.register_tool("benchmark", StubToolInterface())
+        self.register_tool("growth", StubToolInterface())
+        self.register_tool("funding", StubToolInterface())
+        self.register_tool("compliance", StubToolInterface())
+        self.register_tool("predictive_sprint14", StubToolInterface())
 
     # ---- registry ---------------------------------------------------- #
 

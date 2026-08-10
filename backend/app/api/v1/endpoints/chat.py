@@ -160,16 +160,67 @@ def _service(db: Annotated[Session, Depends(get_db)]) -> ConversationService:
 
     settings = get_settings()
     factory = ProviderFactory(settings)
-    assistant_service = AssistantProviderService(
-        context_builder=context_builder,
-        provider_factory=factory,
-    )
 
+    # SPRINT AI-2 — wire the ToolDispatcher with real engine
+    # wrappers so the AI assistant's tool dispatch hits
+    # authoritative engines (Health, DNA, Risk, Schemes,
+    # Finance, Recommendations, Readiness, Insights,
+    # Opportunity, Benchmark, Growth, Funding, Compliance,
+    # KPI, Knowledge Retrieval, Predictive Sprint 14)
+    # instead of returning ``status="not_implemented"``
+    # stubs for every service.
     knowledge_retriever = KnowledgeRetrievalService.from_repository(
         _get_knowledge_repository(),
         top_k=settings.knowledge_retrieval_top_k
         if hasattr(settings, "knowledge_retrieval_top_k")
         else 3,
+    )
+
+    from app.services.ai.reasoning.tool_selector import ToolDispatcher
+    from app.services.ai.reasoning.engine_tools import (
+        BenchmarkTool,
+        BusinessDnaTool,
+        ComplianceTool,
+        FinanceTool,
+        FundingTool,
+        GrowthTool,
+        HealthScoreTool,
+        InsightsTool,
+        KnowledgeRetrievalTool,
+        KpiTool,
+        OpportunityTool,
+        PredictiveSprint14Tool,
+        ReadinessTool,
+        RecommendationTool,
+        RiskTool,
+        SchemesSprint16Tool,
+    )
+
+    tool_dispatcher = ToolDispatcher()
+    tool_dispatcher.register_tool("health_score", HealthScoreTool(repo))
+    tool_dispatcher.register_tool("kpi", KpiTool(repo))
+    tool_dispatcher.register_tool(
+        "knowledge_retrieval",
+        KnowledgeRetrievalTool(knowledge_retriever),
+    )
+    tool_dispatcher.register_tool("recommendation", RecommendationTool(repo))
+    tool_dispatcher.register_tool("schemes_sprint16", SchemesSprint16Tool(repo))
+    tool_dispatcher.register_tool("business_dna", BusinessDnaTool(repo))
+    tool_dispatcher.register_tool("risk", RiskTool(repo))
+    tool_dispatcher.register_tool("insights", InsightsTool(repo))
+    tool_dispatcher.register_tool("opportunity", OpportunityTool(repo))
+    tool_dispatcher.register_tool("readiness", ReadinessTool(repo))
+    tool_dispatcher.register_tool("finance", FinanceTool(repo))
+    tool_dispatcher.register_tool("benchmark", BenchmarkTool(repo))
+    tool_dispatcher.register_tool("growth", GrowthTool(repo))
+    tool_dispatcher.register_tool("funding", FundingTool(repo))
+    tool_dispatcher.register_tool("compliance", ComplianceTool(repo))
+    tool_dispatcher.register_tool("predictive_sprint14", PredictiveSprint14Tool(repo))
+
+    assistant_service = AssistantProviderService(
+        context_builder=context_builder,
+        provider_factory=factory,
+        tool_dispatcher=tool_dispatcher,
     )
     # H7.8C — rolling context window size is now configurable via
     # ``Settings.ai_max_history_turns``. The default in the service

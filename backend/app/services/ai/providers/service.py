@@ -116,7 +116,6 @@ from app.services.ai.reasoning.question_understanding import (
 )
 from app.services.ai.reasoning.tool_selector import (
     StubToolInterface,
-    ToolDispatcher,
     ToolSelector,
 )
 from app.services.ai.reasoning.answer_composer import compose_adaptive_answer
@@ -225,6 +224,7 @@ class AssistantProviderService:
         provider_factory: ProviderFactory | None = None,
         reasoning_engine: Any | None = None,
         evidence_retriever: Any | None = None,
+        tool_dispatcher: Any | None = None,
     ) -> None:
         self._context_builder = context_builder
         self._prompt_builder = prompt_builder or AssistantPromptBuilder()
@@ -255,6 +255,19 @@ class AssistantProviderService:
             if evidence_retriever is not None
             else EvidenceRetriever()
         )
+        # SPRINT AI-2 — ToolDispatcher dependency. When the
+        # chat endpoint constructs the service with a real
+        # dispatcher (16 real engine wrappers), that dispatcher
+        # is used. When the kwarg is None (legacy callers,
+        # unit tests that don't care about tool dispatch) a
+        # stub-only dispatcher is built so ``generate()`` keeps
+        # working with ``status="not_implemented"`` everywhere.
+        if tool_dispatcher is None:
+            from app.services.ai.reasoning.tool_selector import (
+                ToolDispatcher as _ToolDispatcher,
+            )
+            tool_dispatcher = _ToolDispatcher()
+        self._tool_dispatcher = tool_dispatcher
 
     # ---- public API -------------------------------------------------- #
 
@@ -338,9 +351,11 @@ class AssistantProviderService:
             )
             # Stage 5 — dispatch deterministic tools. The
             # dispatcher returns stubs by default for any
-            # engine the layer hasn't wired in.
-            dispatcher = ToolDispatcher()
-            tool_results = dispatcher.dispatch(
+            # engine the layer hasn't wired in. SPRINT AI-2:
+            # ``self._tool_dispatcher`` is the dispatcher
+            # passed in via the constructor (or a default
+            # stub-only dispatcher when no kwarg was given).
+            tool_results = self._tool_dispatcher.dispatch(
                 owner_id=owner_id,
                 question_understanding=question_understanding,
                 reasoning_plan=reasoning_plan,
