@@ -131,6 +131,32 @@ export interface ChatMessage {
    * deterministic consultant (no server round-trip).
    */
   generation?: ChatGenerationMeta;
+  /**
+   * Sprint AI-5 — Business Scenario Copilot envelope. The
+   * structured 10-field "what if" envelope from the backend
+   * (mirrored at the top level of ChatMessageOut). The
+   * frontend ``ScenarioAnalysisCard`` renders this directly
+   * above the assistant body when it is non-null. The card
+   * is hidden entirely when this field is missing or
+   * ``present === false``.
+   *
+   * Tolerance: every field is optional so legacy rows that
+   * pre-date AI-5 still type-check.
+   */
+  scenario_analysis?: {
+    scenario_name?: string;
+    baseline?: string[];
+    changes?: string[];
+    assumptions?: string[];
+    calculation_method?: string;
+    estimated_effects?: string[];
+    risks?: string[];
+    unknowns?: string[];
+    sensitivity?: string[];
+    confidence?: string;
+    disclaimer?: string;
+    present?: boolean;
+  };
 }
 
 /**

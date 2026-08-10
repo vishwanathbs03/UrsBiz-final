@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import type { ChatMessage as ChatMessageModel } from "./types";
 import { ConsultantRenderer } from "./ConsultantRenderer";
 import { GroundedResponseRenderer } from "./GroundedResponseRenderer";
+import { ScenarioAnalysisCard } from "./ScenarioAnalysisCard";
 import { formatAssistantBody } from "./AssistantRenderer";
 import { TrustBadge, TrustMeta, type TrustLabel } from "./TrustBadge";
 
@@ -122,6 +123,17 @@ export function MessageBubble({
           isUser ? "items-end" : "items-start",
         )}
       >
+        {/* Sprint AI-5 — Business Scenario Copilot. The
+            structured 10-field envelope rendered as a
+            "what if" card above the body content. Hidden
+            entirely when the message is not a scenario
+            prompt (the LLM route runs unchanged). */}
+        {!isUser && message.scenario_analysis && (
+          <ScenarioAnalysisCard
+            analysis={message.scenario_analysis}
+            className="self-stretch"
+          />
+        )}
         {isGrounded ? (
           <div
             data-testid="grounded-message-bubble"

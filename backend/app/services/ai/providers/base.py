@@ -627,6 +627,15 @@ class GenerationMeta:
     claim_audit_rejected: bool = False
     claim_audit_soft_corrections: int = 0
 
+    # SPRINT AI-5 — Business Scenario Copilot envelope. Auto-route
+    # injection in ConversationService stamps the deterministic
+    # ``ScenarioAnalysis`` envelope (10 fields per the brief) here
+    # when the prompt is classified as a "what if" question. Always
+    # None for non-scenario prompts. The downstream `_message_payload`
+    # projection in conversation_service.py projects the dict through
+    # to ``chat_message.scenario_analysis``.
+    scenario_analysis: dict | None = None
+
     @staticmethod
     def empty(
         *,
@@ -662,6 +671,7 @@ class GenerationMeta:
         claim_audit: dict | None = None,
         claim_audit_rejected: bool = False,
         claim_audit_soft_corrections: int = 0,
+        scenario_analysis: dict | None = None,
     ) -> "GenerationMeta":
         """Return a default-valued GenerationMeta."""
         return GenerationMeta(
@@ -697,6 +707,7 @@ class GenerationMeta:
             claim_audit=claim_audit,
             claim_audit_rejected=claim_audit_rejected,
             claim_audit_soft_corrections=claim_audit_soft_corrections,
+            scenario_analysis=scenario_analysis,
         )
 
     def merge(self, **overrides: Any) -> "GenerationMeta":

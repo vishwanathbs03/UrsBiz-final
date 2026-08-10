@@ -68,6 +68,7 @@ from app.repositories.chat_session_repository import (
 from app.services.ai.providers.base import (
     AssistantContext,
     AssistantTurn,
+    GenerationMeta,
     ProviderUnavailableError,
     ProviderTimeoutError,
 )
@@ -75,6 +76,7 @@ from app.services.ai.providers.context_builder import AssistantContextBuilder
 from app.services.ai.providers.factory import ProviderFactory
 from app.services.ai.providers.ollama import OllamaProvider
 from app.services.ai.providers.service import AssistantProviderService
+from app.services.ai.simulation.analysis import ScenarioAnalyzer
 from app.services.knowledge_retrieval.service import KnowledgeRetrievalService
 
 
@@ -115,6 +117,7 @@ class ConversationService:
         assistant_service: AssistantProviderService | None = None,
         rolling_context_turns: int = _ROLLING_CONTEXT_TURNS,
         knowledge_retriever: KnowledgeRetrievalService | None = None,
+        scenario_analyzer: ScenarioAnalyzer | None = None,
     ) -> None:
         self._repo = repo
         self._assistant = assistant_service or self._default_assistant_service()
@@ -123,6 +126,10 @@ class ConversationService:
         # the chat service is identical to Part 3 — no
         # retrieval, no citations.
         self._knowledge = knowledge_retriever
+        # Sprint AI-5 — Business Scenario Copilot. The analyzer
+        # is pure (no I/O, no LLM call). When None, a default
+        # instance is used so callers don't have to wire one.
+        self._scenario_analyzer = scenario_analyzer or ScenarioAnalyzer()
 
     # ---- CRUD -------------------------------------------------------- #
 
@@ -202,6 +209,18 @@ class ConversationService:
         # 3. Build the assistant context via Part 2.
         context = self._assistant.build_context(owner_id=owner_id)
 
+        # 3.5. Sprint AI-5 — Business Scenario Copilot. When
+        #      the prompt is a "what if" question, build the
+        #      structured 10-field envelope BEFORE the LLM
+        #      call so the envelope can ride the GenerationMeta
+        #      to the wire. The LLM is still invoked afterwards
+        #      for surrounding prose. The whole step is wrapped
+        #      in try/except so a ScenarioAnalyzer failure never
+        #      crashes the chat endpoint.
+        scenario_envelope = self._maybe_build_scenario_analysis(
+            context=context, prompt=content
+        )
+
         # 4. Sprint 7 Part 4 — retrieve, rank, build
         #    citations. Bind Owner_id to the assistant's
         #    context shape so the per-business boost fires
@@ -226,6 +245,18 @@ class ConversationService:
             knowledge=knowledge_ctx,
             mode=mode,
         )
+
+        # 5.5. Sprint AI-5 — stamp the scenario envelope onto
+        #      the provider's GenerationMeta (or create one when
+        #      the legacy mock-provider path returned None).
+        #      The envelope is always a dict so the wire projection
+        #      can carry it verbatim. When the prompt was not a
+        #      scenario question, ``scenario_envelope`` is None and
+        #      we leave the GenerationMeta untouched.
+        if scenario_envelope is not None:
+            self._stamp_scenario_analysis(
+                assistant_resp=assistant_resp, envelope=scenario_envelope
+            )
 
         # 6. Persist the assistant reply. Sources are the
         #    union of the provider's own sources and the
@@ -294,6 +325,79 @@ class ConversationService:
         )
 
     # ---- internals --------------------------------------------------- #
+
+    def _maybe_build_scenario_analysis(
+        self,
+        *,
+        context: AssistantContext | None,
+        prompt: str,
+    ) -> dict | None:
+        """AI-5 — return a scenario-envelope dict for "what if" prompts.
+
+        Returns ``None`` when the prompt is not a scenario question
+        (the LLM route runs unchanged) or when the analyzer raises
+        (defensive — never crashes the chat endpoint).
+
+        The returned dict is exactly the
+        :meth:`ScenarioAnalysis.to_dict` shape (10 fields + the
+        ``present`` helper flag) so the wire projection can
+        serialise it verbatim.
+        """
+        try:
+            analyzer = self._scenario_analyzer
+            if analyzer is None:
+                return None
+            # Context can be None on the legacy mock-provider path.
+            # The analyzer will fall back to defaults / missing_data
+            # in that case.
+            envelope = analyzer.analyze(prompt, context)
+            if envelope is None:
+                return None
+            return envelope.to_dict()
+        except Exception:  # pragma: no cover — defensive
+            return None
+
+    def _stamp_scenario_analysis(
+        self,
+        *,
+        assistant_resp: Any,
+        envelope: dict,
+    ) -> None:
+        """AI-5 — stamp the envelope onto ``assistant_resp.generation``.
+
+        The provider's :class:`AssistantResponse` is a frozen dataclass
+        so we use ``object.__setattr__`` to mutate the nested
+        ``generation`` (also frozen) in place. The original
+        GenerationMeta is replaced when ``generation`` is None
+        (legacy mock-provider path).
+        """
+        try:
+            gen = getattr(assistant_resp, "generation", None)
+            if gen is None:
+                # Legacy path — materialise a minimal GenerationMeta
+                # just so the envelope has somewhere to live. Provider
+                # / model / fallback_used are taken from the response.
+                gen = GenerationMeta.empty(
+                    mode="grounded",
+                    provider_used=getattr(assistant_resp, "provider_used", ""),
+                    model=getattr(assistant_resp, "model", ""),
+                    provider_latency_ms=getattr(
+                        assistant_resp, "provider_latency_ms", None
+                    ),
+                    fallback_used=bool(
+                        getattr(assistant_resp, "fallback_used", False)
+                    ),
+                    scenario_analysis=envelope,
+                )
+                object.__setattr__(assistant_resp, "generation", gen)
+                return
+            # Re-build via dataclasses.replace so the frozen contract
+            # holds for the rest of the response.
+            from dataclasses import replace
+            new_gen = replace(gen, scenario_analysis=envelope)
+            object.__setattr__(assistant_resp, "generation", new_gen)
+        except Exception:  # pragma: no cover — defensive
+            return
 
     def _build_history(
         self,
@@ -568,6 +672,14 @@ def _message_payload(msg) -> dict:
         "claim_audit": gen_claim_audit,
         "claim_audit_rejected": gen_claim_audit_rejected,
         "claim_audit_soft_corrections": gen_claim_audit_soft_corrections,
+        # AI-5 — Business Scenario Copilot envelope. Mirrored at
+        # the top level so the frontend's ScenarioAnalysisCard
+        # can render the 10-field "what if" card without
+        # drilling into ``generation.*``. The envelope is always
+        # None for non-scenario prompts (the LLM route runs
+        # unchanged). Backward-compatible: legacy rows never
+        # carry this key.
+        "scenario_analysis": (generation or {}).get("scenario_analysis"),
     }
     # H7.8C — leak guard. The serializer must never emit a
     # field name from the brief-mandated secret set

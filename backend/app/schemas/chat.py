@@ -228,6 +228,45 @@ class ChatClaimAuditTrace(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# SPRINT AI-5 — Business Scenario Copilot wire schema
+# ---------------------------------------------------------------------------
+
+
+class ChatScenarioAnalysis(BaseModel):
+    """SPRINT AI-5 — the 10-field "what if" envelope.
+
+    The shape matches the brief exactly: every field is a
+    bullet-list serialised as a ``list[str]`` (or a single
+    ``str`` for the calculation method, confidence, and
+    scenario name). The disclaimer is always the canonical
+    "Illustrative scenario — not a prediction." string so
+    the wire cannot accidentally drop the label.
+
+    ``present`` is a server-side helper flag — always
+    ``True`` on a non-None envelope. The frontend can use
+    it to gate the card render without checking the
+    discriminating fields.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    scenario_name: str = Field(default="", max_length=200)
+    baseline: list[str] = Field(default_factory=list)
+    changes: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    calculation_method: str = Field(default="", max_length=2000)
+    estimated_effects: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    unknowns: list[str] = Field(default_factory=list)
+    sensitivity: list[str] = Field(default_factory=list)
+    confidence: str = Field(default="unknown", max_length=20)
+    disclaimer: str = Field(
+        default="Illustrative scenario — not a prediction.", max_length=200
+    )
+    present: bool = True
+
+
+# --------------------------------------------------------------------------- #
 # SPRINT AI-3 — claim-aware response wire schema
 # --------------------------------------------------------------------------- #
 
@@ -355,6 +394,13 @@ class ChatClaimAwareResponse(BaseModel):
     # top-level ``chat_message.claim_audit`` field.
     claim_audit: dict | None = None
 
+    # SPRINT AI-5 — Business Scenario Copilot envelope. The
+    # structured 10-field "what if" envelope follows the same
+    # pattern as the AI-4 trace: mirrored on the top-level
+    # ``chat_message.scenario_analysis`` field so the frontend
+    # card renders without drilling into ``generation.*``.
+    scenario_analysis: dict | None = None
+
 
 class ChatGenerationMeta(BaseModel):
     """The full provenance envelope persisted with every assistant turn.
@@ -436,6 +482,14 @@ class ChatGenerationMeta(BaseModel):
     claim_audit: dict | None = None
     claim_audit_rejected: bool = False
     claim_audit_soft_corrections: int = Field(default=0, ge=0)
+
+    # SPRINT AI-5 — Business Scenario Copilot envelope. The
+    # structured 10-field "what if" envelope from the brief;
+    # default None so legacy rows that pre-date AI-5 still
+    # deserialize. The frontend ``ScenarioAnalysisCard`` reads
+    # this top-level field so the chat route renders the card
+    # without drilling into ``generation.*``.
+    scenario_analysis: dict | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -637,6 +691,23 @@ class ChatMessageOut(BaseModel):
     deterministic fallback ALWAYS populates it. The raw
     dict form is also exposed via ``claim_audit`` for
     backends that introspect the audit JSON."""
+
+    scenario_analysis: dict | None = None
+    """SPRINT AI-5 — the structured 10-field "what if" envelope
+    from the Business Scenario Copilot. ``None`` for non-scenario
+    prompts (the LLM route runs unchanged) and for legacy rows
+    that pre-date AI-5. The frontend ``ScenarioAnalysisCard``
+    renders this directly above the assistant body when it is
+    non-None. The ``scenario_analysis`` field is the raw dict
+    shape from ``ScenarioAnalysis.to_dict()``; a typed mirror
+    is also exposed via ``scenario_analysis_typed``."""
+
+    scenario_analysis_typed: ChatScenarioAnalysis | None = None
+    """SPRINT AI-5 — Pydantic-typed mirror of the envelope.
+    Always ``None`` for non-scenario prompts and legacy rows;
+    the deterministic fallback for "what if" prompts ALWAYS
+    populates it. Carries ``extra="forbid"`` so no unknown
+    fields surface on the wire."""
 
 
 # --------------------------------------------------------------------------- #
