@@ -467,6 +467,32 @@ def _message_payload(msg) -> dict:
     gen_claim_categories = list(
         (generation or {}).get("claim_categories_used") or []
     )
+    # AI-3 — claim-aware response contract mirrors. The
+    # claim_aware_response is sourced from GenerationMeta
+    # ``grounded_payload["claim_aware"]`` (set by the AI-3
+    # pipeline in service.py) and projected to the top level
+    # so the frontend can render the structured panel without
+    # drilling into ``generation.*``.
+    gen_grounded_payload = (
+        (generation or {}).get("grounded_payload")
+        if isinstance((generation or {}).get("grounded_payload"), dict)
+        else None
+    )
+    gen_claim_aware = (
+        gen_grounded_payload.get("claim_aware")
+        if gen_grounded_payload is not None
+        else None
+    )
+    gen_claim_aware_validated = bool(
+        (generation or {}).get("claim_aware_validated") or False
+    )
+    gen_numeric_conflicts_count = int(
+        (generation or {}).get("numeric_conflicts_count") or 0
+    )
+    gen_server_confidence = (generation or {}).get("server_confidence")
+    gen_server_confidence_rationale = str(
+        (generation or {}).get("server_confidence_rationale") or ""
+    )
 
     payload = {
         "id": int(msg.id),
@@ -505,6 +531,16 @@ def _message_payload(msg) -> dict:
         "question_understanding": gen_question_understanding,
         "tool_calls": gen_tool_calls,
         "claim_categories_used": gen_claim_categories,
+        # AI-3 — claim-aware contract mirrors. Backward-compatible:
+        # claim_aware_response is None when the LLM did not fill the
+        # schema or when this is a legacy row; the frontend renders
+        # the old path. server_confidence is always populated when
+        # the meta carries it (None on legacy rows).
+        "claim_aware_response": gen_claim_aware,
+        "claim_aware_validated": gen_claim_aware_validated,
+        "numeric_conflicts_count": gen_numeric_conflicts_count,
+        "server_confidence": gen_server_confidence,
+        "server_confidence_rationale": gen_server_confidence_rationale,
     }
     # H7.8C — leak guard. The serializer must never emit a
     # field name from the brief-mandated secret set

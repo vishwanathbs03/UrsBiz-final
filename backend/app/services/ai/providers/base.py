@@ -589,6 +589,28 @@ class GenerationMeta:
     tool_calls: tuple[dict, ...] = field(default_factory=tuple)
     claim_categories_used: tuple[str, ...] = field(default_factory=tuple)
 
+    # SPRINT AI-3 — Claim-aware response audit fields. These
+    # four fields surface the AI-3 layers onto the provenance
+    # envelope. They are appended at the END so legacy callers
+    # that don't pass them keep working (each has a safe
+    # default).
+    #   * ``claim_aware_validated`` — True iff the AI-3 layer
+    #     successfully parsed and validated the LLM's
+    #     ``claim_aware`` payload.
+    #   * ``numeric_conflicts_count`` — total NumericConflict
+    #     records the checker emitted (0 when the LLM didn't
+    #     fill claim_aware).
+    #   * ``server_confidence`` — the integer 0..100 the
+    #     ConfidenceCalculator computed. This is the value the
+    #     wire surfaces; the LLM's self-reported confidence is
+    #     recorded in ``grounded_payload`` but never overrides.
+    #   * ``server_confidence_rationale`` — the one-line
+    #     English summary of the calculator's top-3 contributors.
+    claim_aware_validated: bool = False
+    numeric_conflicts_count: int = 0
+    server_confidence: int | None = None
+    server_confidence_rationale: str = ""
+
     @staticmethod
     def empty(
         *,
@@ -617,6 +639,10 @@ class GenerationMeta:
         question_understanding: dict | None = None,
         tool_calls: tuple[dict, ...] = (),
         claim_categories_used: tuple[str, ...] = (),
+        claim_aware_validated: bool = False,
+        numeric_conflicts_count: int = 0,
+        server_confidence: int | None = None,
+        server_confidence_rationale: str = "",
     ) -> "GenerationMeta":
         """Return a default-valued GenerationMeta."""
         return GenerationMeta(
@@ -645,6 +671,10 @@ class GenerationMeta:
             question_understanding=question_understanding,
             tool_calls=tool_calls,
             claim_categories_used=claim_categories_used,
+            claim_aware_validated=claim_aware_validated,
+            numeric_conflicts_count=numeric_conflicts_count,
+            server_confidence=server_confidence,
+            server_confidence_rationale=server_confidence_rationale,
         )
 
     def merge(self, **overrides: Any) -> "GenerationMeta":
@@ -848,6 +878,17 @@ class DeterministicFallbackProvider:
         body = _fallback_body(request)
         reason = reason or "not_configured"
         generated_at = _now_iso()
+        # SPRINT AI-3 — the deterministic fallback builds its
+        # own claim_aware payload from AssistantContext so every
+        # chat reply (real LLM or fallback) has a non-None
+        # chat_message.claim_aware_response. The fallback's
+        # version is grounded by construction → server_confidence
+        # = 100, no numeric conflicts, claim_aware_validated=True.
+        # Import lazily so this module can finish initialising
+        # without a circular import through the providers
+        # package's __init__.py.
+        from app.services.ai.providers import claim_fallback as _cf_mod
+        claim_payload = _cf_mod.build_fallback_claim_aware(request)
         gen = GenerationMeta(
             provider=self.name,
             model=self.name,
@@ -864,14 +905,20 @@ class DeterministicFallbackProvider:
             + len(request.context.schemes)
             + len(request.context.forecasts)
             + len(request.context.action_items),
-            confidence=None,
+            confidence=claim_payload.get("server_confidence"),
             assumptions=(),
             limitations=(),
             evidence_references=(),
             generated_at=generated_at,
             prompt_truncated=False,
             provider_latency_ms=None,
-            grounded_payload=None,
+            grounded_payload={"claim_aware": claim_payload},
+            claim_aware_validated=True,
+            numeric_conflicts_count=0,
+            server_confidence=claim_payload.get("server_confidence"),
+            server_confidence_rationale=claim_payload.get(
+                "server_confidence_rationale", "fallback grounded by construction"
+            ),
         )
         return AssistantResponse(
             body=body,

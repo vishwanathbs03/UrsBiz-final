@@ -156,6 +156,134 @@ class ChatGroundedResponse(BaseModel):
     server_grounding_score: int = Field(ge=0, le=100, default=0)
     evidence_references: list[ChatEvidenceReference] = Field(default_factory=list)
 
+    # SPRINT AI-3 — claim-aware response payload, nested under
+    # the existing grounded_payload envelope so the wire stays
+    # backward-compatible. ``None`` for legacy rows that pre-date
+    # AI-3; the deterministic fallback ALWAYS populates it.
+    claim_aware: dict | None = None
+
+
+# --------------------------------------------------------------------------- #
+# SPRINT AI-3 — claim-aware response wire schema
+# --------------------------------------------------------------------------- #
+
+
+class ChatClaimEvidenceRef(BaseModel):
+    """Pointer back to an evidence registry entry a claim cites.
+
+    ``audit_log`` is a list of structured records the numeric
+    checker emits when it mutates a claim's text. Each entry
+    preserves the original literal so the audit trail is
+    faithful. Empty list when no conflict was repaired.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(default="", max_length=2000)
+    claim_type: Literal[
+        "FACT",
+        "CALCULATION",
+        "INFERENCE",
+        "RECOMMENDATION",
+        "SCENARIO",
+        "EXTERNAL_FACT",
+        "UNKNOWN",
+    ] = "UNKNOWN"
+    evidence_references: list[str] = Field(default_factory=list)
+    confidence: int | None = Field(default=None, ge=0, le=100)
+    audit_log: list[dict] = Field(default_factory=list)
+    user_provided: bool = False
+
+
+class ChatClaimRecommendation(BaseModel):
+    """One LLM-authored action recommendation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(default="", max_length=240)
+    reason: str = Field(default="", max_length=600)
+    recommendation_id: str = Field(default="", max_length=120)
+    evidence_references: list[str] = Field(default_factory=list)
+    category: str = Field(default="", max_length=80)
+    priority: str = Field(default="", max_length=20)
+    estimated_score_gain: int | None = Field(default=None, ge=0, le=100)
+    estimated_timeline: str = Field(default="", max_length=80)
+
+
+class ChatClaimCalculation(BaseModel):
+    """One derived figure the LLM surfaced."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=120)
+    result: float = 0.0
+    unit: str = Field(default="", max_length=40)
+    source: Literal[
+        "URSBIZ_ENGINE",
+        "MODEL_SCENARIO",
+        "USER_INPUT",
+    ] = "URSBIZ_ENGINE"
+    expression: str = Field(default="", max_length=400)
+    inputs: dict = Field(default_factory=dict)
+    evidence_references: list[str] = Field(default_factory=list)
+
+
+class ChatClaimScenario(BaseModel):
+    """One illustrative scenario the LLM authored."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(default="", max_length=240)
+    description: str = Field(default="", max_length=600)
+    assumptions: list[str] = Field(default_factory=list)
+    revenue_impact: str = Field(default="", max_length=200)
+    score_impact: str = Field(default="", max_length=200)
+    confidence: int | None = Field(default=None, ge=0, le=100)
+    evidence_references: list[str] = Field(default_factory=list)
+
+
+class ChatClaimUnknown(BaseModel):
+    """One knowledge gap the LLM surfaced."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(min_length=1, max_length=400)
+    impact: Literal["HIGH", "MEDIUM", "LOW"] = "MEDIUM"
+    rationale: str = Field(default="", max_length=400)
+    clarification_prompt: str = Field(default="", max_length=400)
+
+
+class ChatClaimAwareResponse(BaseModel):
+    """SPRINT AI-3 — the validated claim-aware response envelope.
+
+    Optional on every chat reply. ``None`` when the LLM didn't
+    fill the new schema (the existing ``ChatGroundedResponse``
+    surface carries the wire content). The deterministic
+    fallback builds a non-None envelope from ``AssistantContext``
+    so EVERY chat reply has a structured payload.
+
+    ``server_confidence`` and ``server_confidence_rationale``
+    are server-stamped; the LLM cannot author them.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    answer: str = Field(default="", max_length=2000)
+    claims: list[ChatClaimEvidenceRef] = Field(default_factory=list)
+    recommendations: list[ChatClaimRecommendation] = Field(default_factory=list)
+    calculations: list[ChatClaimCalculation] = Field(default_factory=list)
+    scenarios: list[ChatClaimScenario] = Field(default_factory=list)
+    unknowns: list[ChatClaimUnknown] = Field(default_factory=list)
+    evidence_references: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+    narrative: str = Field(default="", max_length=4000)
+
+    server_confidence: int | None = Field(default=None, ge=0, le=100)
+    server_confidence_rationale: str = Field(default="", max_length=500)
+    numeric_conflicts: list[dict] = Field(default_factory=list)
+    server_audit: dict = Field(default_factory=dict)
+
 
 class ChatGenerationMeta(BaseModel):
     """The full provenance envelope persisted with every assistant turn.
@@ -218,6 +346,15 @@ class ChatGenerationMeta(BaseModel):
     question_understanding: dict | None = None
     tool_calls: list[dict] = Field(default_factory=list)
     claim_categories_used: list[str] = Field(default_factory=list)
+
+    # SPRINT AI-3 — Claim-aware response audit fields mirrored
+    # from the GenerationMeta dataclass. Defaults are safe
+    # empties so legacy rows that pre-date the column
+    # deserialize without complaint.
+    claim_aware_validated: bool = False
+    numeric_conflicts_count: int = Field(default=0, ge=0)
+    server_confidence: int | None = Field(default=None, ge=0, le=100)
+    server_confidence_rationale: str = Field(default="", max_length=500)
 
 
 # --------------------------------------------------------------------------- #
@@ -368,6 +505,35 @@ class ChatMessageOut(BaseModel):
     claim-category labels the validator observed on the
     LLM's prose (FACT/CALCULATION/INFERENCE/RECOMMENDATION/
     SCENARIO/EXTERNAL_FACT/UNKNOWN)."""
+
+    # SPRINT AI-3 — claim-aware response mirrors. Every
+    # chat reply (real LLM or fallback) carries a non-None
+    # ``claim_aware_response``; the server stamps the
+    # ``server_confidence`` value via the deterministic
+    # calculator.
+    claim_aware_response: ChatClaimAwareResponse | None = None
+    """SPRINT AI-3 — the validated claim-aware envelope.
+    ``None`` only on legacy rows that pre-date the column."""
+
+    server_confidence: int | None = Field(default=None, ge=0, le=100)
+    """SPRINT AI-3 — server-computed confidence, 0..100.
+    The LLM's self-reported confidence (in
+    ``generation.grounded_payload["confidence"]``) is
+    recorded but never overrides this value."""
+
+    server_confidence_rationale: str = Field(default="", max_length=500)
+    """SPRINT AI-3 — one-line English summary of the top
+    three contributors to ``server_confidence``."""
+
+    numeric_conflicts_count: int = Field(default=0, ge=0)
+    """SPRINT AI-3 — count of NumericConflict records the
+    numeric checker emitted on this turn. Zero when the
+    LLM didn't fill claim_aware or when no conflicts fired."""
+
+    claim_aware_validated: bool = False
+    """SPRINT AI-3 — True iff the AI-3 layer successfully
+    parsed and validated the LLM's claim_aware payload
+    (or the fallback built one from AssistantContext)."""
 
 
 # --------------------------------------------------------------------------- #

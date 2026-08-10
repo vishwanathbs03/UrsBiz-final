@@ -645,6 +645,74 @@ class AssistantProviderService:
                 },
             )
 
+        # AI-3 — claim-aware validation, numeric consistency,
+        # and deterministic server confidence. Each stage is
+        # independent: parse failure on the LLM's optional
+        # ``claim_aware`` block leaves the existing pipeline
+        # untouched; the validator / checker / calculator all
+        # raise-caught so a buggy LLM payload can't break the
+        # chat path.
+        claim_response = None
+        claim_report = None
+        numeric_report = None
+        confidence_report = None
+        claim_aware_raw = None
+        try:
+            from app.services.ai.providers.claim_parser import (
+                extract_claim_aware_block,
+                parse_claim_aware_payload,
+            )
+            from app.services.ai.providers.claim_validator import ClaimValidator
+            from app.services.ai.providers.numeric_checker import (
+                NumericConsistencyChecker,
+            )
+            from app.services.ai.providers.confidence_calculator import (
+                ConfidenceCalculator,
+            )
+
+            claim_aware_raw = extract_claim_aware_block(parsed)
+            if claim_aware_raw is not None:
+                claim_result = parse_claim_aware_payload(claim_aware_raw)
+                if claim_result.ok and claim_result.response is not None:
+                    claim_response = claim_result.response
+                    claim_report = ClaimValidator(
+                        registry, claim_response
+                    ).validate()
+                    numeric_report = NumericConsistencyChecker(
+                        context=request.context,
+                        tool_results=tuple(tool_results or ()),
+                    ).check(claim_response)
+                    confidence_report = ConfidenceCalculator().compute(
+                        context=request.context,
+                        tool_results=tuple(tool_results or ()),
+                        registry=registry,
+                        claim_response=claim_response,
+                        claim_report=claim_report,
+                        numeric_report=numeric_report,
+                    )
+                elif claim_result.errors:
+                    logger.info(
+                        "ai.provider.ai3_claim_aware_parse_failed",
+                        extra={
+                            "event": "ai.provider.ai3_claim_aware_parse_failed",
+                            "mode": "grounded",
+                            "errors": list(claim_result.errors)[:10],
+                            "request_id": getattr(
+                                request, "request_id", None
+                            ),
+                        },
+                    )
+        except Exception as exc:  # noqa: BLE001 — defensive fence
+            logger.warning(
+                "ai.provider.ai3_claim_aware_layer_failed: %s",
+                exc,
+                extra={
+                    "event": "ai.provider.ai3_claim_aware_layer_failed",
+                    "mode": "grounded",
+                    "request_id": getattr(request, "request_id", None),
+                },
+            )
+
         # Stamp the GenerationMeta so the UI can render the
         # evidence disclosure panel. The provider already
         # populated provider_used / model / provider_latency_ms;
@@ -713,6 +781,78 @@ class AssistantProviderService:
             ),
             claim_categories_used=tuple(report.claim_categories_used or ()),
         )
+        # AI-3 — stamp the claim-aware pipeline results on
+        # the GenerationMeta. The merged fields power the
+        # claim-aware disclosure panel + server confidence
+        # badge in the UI. ``claim_aware_response`` is the
+        # JSON-safe dict carried to the wire via
+        # ``conversation_service._message_payload``;
+        # ``claim_aware_raw`` preserves the original LLM
+        # payload for the audit log.
+        from dataclasses import replace as _replace_ai3
+        claim_aware_dict = (
+            claim_response.to_dict()
+            if claim_response is not None
+            else None
+        )
+        # Stamp server_confidence + numeric_conflicts when the
+        # claim-aware response was validated. The mutable
+        # nature of ``claim_response`` means the
+        # ``numeric_report`` mutations already landed in the
+        # ``to_dict()`` payload above — re-stamp here.
+        if claim_aware_dict is not None:
+            if confidence_report is not None:
+                claim_aware_dict["server_confidence"] = (
+                    confidence_report.score
+                )
+                claim_aware_dict["server_confidence_rationale"] = (
+                    confidence_report.rationale
+                )
+            if numeric_report is not None:
+                claim_aware_dict["numeric_conflicts"] = [
+                    c.to_dict() for c in numeric_report.conflicts
+                ]
+            claim_aware_dict["server_audit"] = {
+                "source": "llm",
+                "claim_validation_passed": bool(
+                    claim_report.passed if claim_report else False
+                ),
+                "claim_validation_score": int(
+                    claim_report.score if claim_report else 0
+                ),
+                "numeric_conflicts_count": int(
+                    numeric_report.count if numeric_report else 0
+                ),
+            }
+        meta = _replace_ai3(
+            meta,
+            claim_aware_validated=claim_response is not None,
+            numeric_conflicts_count=int(
+                numeric_report.count if numeric_report else 0
+            ),
+            server_confidence=(
+                confidence_report.score
+                if confidence_report is not None
+                else None
+            ),
+            server_confidence_rationale=(
+                confidence_report.rationale
+                if confidence_report is not None
+                else ""
+            ),
+        )
+        # Carry the AI-3 payload to the wire via GenerationMeta
+        # ``grounded_payload`` so the conversation_service can
+        # project it onto ChatMessageOut.preserve the existing
+        # payload (other stages may already have populated it)
+        # and merge AI-3 in.
+        if claim_aware_dict is not None or claim_aware_raw is not None:
+            existing_payload = dict(meta.grounded_payload or {})
+            if claim_aware_dict is not None:
+                existing_payload["claim_aware"] = claim_aware_dict
+            if claim_aware_raw is not None:
+                existing_payload["claim_aware_raw"] = claim_aware_raw
+            meta = _replace_ai3(meta, grounded_payload=existing_payload)
         # H7.8C — emit a structured event for every successful
         # grounded-mode pass. The event payload carries the
         # server-side grounding score, the registry coverage,

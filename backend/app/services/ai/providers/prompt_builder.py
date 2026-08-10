@@ -147,8 +147,82 @@ Your output MUST be a single JSON object matching the response schema below. Do 
   "confidence": integer,
   "evidence_references": [
     {"id": string, "kind": string, "label": string}
-  ]
+  ],
+  "claim_aware": {
+    "answer": string,
+    "claims": [
+      {
+        "text": string,
+        "claim_type": "FACT" | "CALCULATION" | "INFERENCE" | "RECOMMENDATION" | "SCENARIO" | "EXTERNAL_FACT" | "UNKNOWN",
+        "evidence_references": [string, ...],
+        "confidence": integer (0-100),
+        "user_provided": boolean
+      }
+    ],
+    "recommendations": [
+      {
+        "title": string,
+        "reason": string,
+        "recommendation_id": string,
+        "evidence_references": [string, ...],
+        "category": string,
+        "priority": string,
+        "estimated_score_gain": integer (0-100),
+        "estimated_timeline": string
+      }
+    ],
+    "calculations": [
+      {
+        "name": string,
+        "result": number,
+        "unit": string,
+        "source": "URSBIZ_ENGINE" | "MODEL_SCENARIO" | "USER_INPUT",
+        "expression": string,
+        "inputs": object
+      }
+    ],
+    "scenarios": [
+      {
+        "title": string,
+        "description": string,
+        "assumptions": [string, ...],
+        "revenue_impact": string,
+        "score_impact": string,
+        "confidence": integer (0-100)
+      }
+    ],
+    "unknowns": [
+      {
+        "question": string,
+        "impact": "HIGH" | "MEDIUM" | "LOW",
+        "rationale": string,
+        "clarification_prompt": string
+      }
+    ],
+    "evidence_references": [string, ...],
+    "assumptions": [string, ...],
+    "limitations": [string, ...],
+    "narrative": string
+  }
 }
+
+## CLAIM-AWARE OUTPUT SCHEMA (OPTIONAL)
+
+The ``claim_aware`` field above is OPTIONAL. If you can satisfy the schema, fill it. If you cannot, omit the field entirely — the server falls back to the existing schema and the response still ships.
+
+Rules for ``claim_aware``:
+
+1. ``claim_type`` is one of: FACT, CALCULATION, INFERENCE, RECOMMENDATION, SCENARIO, EXTERNAL_FACT, UNKNOWN.
+2. A FACT claim must cite an evidence ID from the EVIDENCE REGISTRY above OR be marked ``user_provided=true`` when the user supplied the figure themselves (e.g. "₹1.8 Cr to ₹3 Cr").
+3. A CALCULATION claim must declare ``source`` as one of URSBIZ_ENGINE (deterministic engine output), MODEL_SCENARIO (your own projection), or USER_INPUT (user-provided).
+4. An INFERENCE claim must cite an evidence ID.
+5. A RECOMMENDATION must have a non-empty ``reason``.
+6. A SCENARIO must have a non-empty ``assumptions`` list.
+7. An EXTERNAL_FACT must have ``external_source`` OR ``requires_verification=true``.
+8. An UNKNOWN claim must NOT contain numeric literals — UNKNOWN is for gaps, not assertions.
+9. Every numeric in FACT / CALCULATION must reconcile with a value in BUSINESS SNAPSHOT or === TOOL RESULTS ===. Server will replace conflicting values with the authoritative one — original is preserved in audit log.
+10. The server stamps ``server_confidence`` itself — your ``confidence`` is recorded but never surfaces as the wire value.
+11. NEVER invent evidence IDs. Every cited ID must appear in the EVIDENCE REGISTRY block above; fabricated IDs fail validation.
 """
 
 
