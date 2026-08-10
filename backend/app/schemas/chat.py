@@ -162,6 +162,70 @@ class ChatGroundedResponse(BaseModel):
     # AI-3; the deterministic fallback ALWAYS populates it.
     claim_aware: dict | None = None
 
+    # SPRINT AI-4 — server-side Claim Auditor trace, nested
+    # under the same envelope. ``None`` for legacy rows; the
+    # deterministic fallback ALWAYS populates it.
+    claim_audit: dict | None = None
+
+
+# --------------------------------------------------------------------------- #
+# SPRINT AI-4 — claim audit wire schema
+# --------------------------------------------------------------------------- #
+
+
+class ChatClaimAuditRecord(BaseModel):
+    """One record in the AI-4 ``ClaimAuditReport.records`` list.
+
+    Mirrors :class:`app.services.ai.providers.claim_auditor.
+    ClaimAuditRecord`. The 9 attribute axes the brief mandates
+    are all explicit fields; the trace never persists full
+    prose — only ``text_preview`` (≤120 chars).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    claim_id: str = Field(min_length=1, max_length=40)
+    claim_type: Literal[
+        "FACT",
+        "CALCULATION",
+        "INFERENCE",
+        "RECOMMENDATION",
+        "SCENARIO",
+        "EXTERNAL_FACT",
+        "UNKNOWN",
+    ] = "UNKNOWN"
+    text_preview: str = Field(default="", max_length=200)
+    evidence_ids: list[str] = Field(default_factory=list)
+    evidence_exists: bool
+    evidence_supports: bool
+    numeric_match: bool
+    is_inference: bool
+    has_assumptions: bool
+    is_hypothetical: bool
+    requires_verification: bool
+    validated: bool
+    confidence: int = Field(ge=0, le=100, default=0)
+    rejection_reason: str = Field(default="", max_length=200)
+    soft_corrected: bool = False
+
+
+class ChatClaimAuditTrace(BaseModel):
+    """SPRINT AI-4 — the auditor's verdict on the chat reply.
+
+    ``rejected`` is True iff the auditor triggered any
+    hard-rejection condition. ``rejection_reason`` is the
+    stable label of the rule that fired. ``soft_corrections``
+    counts how many claims the auditor rewrote without
+    rejecting the whole answer.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    rejected: bool
+    rejection_reason: str = Field(default="", max_length=200)
+    soft_corrections: int = Field(ge=0, default=0)
+    records: list[ChatClaimAuditRecord] = Field(default_factory=list)
+
 
 # --------------------------------------------------------------------------- #
 # SPRINT AI-3 — claim-aware response wire schema
@@ -284,6 +348,13 @@ class ChatClaimAwareResponse(BaseModel):
     numeric_conflicts: list[dict] = Field(default_factory=list)
     server_audit: dict = Field(default_factory=dict)
 
+    # SPRINT AI-4 — the server-side claim auditor's trace is
+    # nested inside the same envelope so legacy clients that
+    # only know about ``claims`` / ``recommendations`` keep
+    # parsing while the new AI-4 surface is available on the
+    # top-level ``chat_message.claim_audit`` field.
+    claim_audit: dict | None = None
+
 
 class ChatGenerationMeta(BaseModel):
     """The full provenance envelope persisted with every assistant turn.
@@ -355,6 +426,16 @@ class ChatGenerationMeta(BaseModel):
     numeric_conflicts_count: int = Field(default=0, ge=0)
     server_confidence: int | None = Field(default=None, ge=0, le=100)
     server_confidence_rationale: str = Field(default="", max_length=500)
+
+    # SPRINT AI-4 — server-side Claim Auditor audit fields
+    # mirrored from the GenerationMeta dataclass. Defaults are
+    # safe empties so legacy rows that pre-date the AI-4 column
+    # deserialize without complaint. The frontend's "Why am I
+    # seeing this?" disclosure panel reads ``claim_audit``;
+    # the two booleans are flat mirrors for the trust badge.
+    claim_audit: dict | None = None
+    claim_audit_rejected: bool = False
+    claim_audit_soft_corrections: int = Field(default=0, ge=0)
 
 
 # --------------------------------------------------------------------------- #
@@ -534,6 +615,28 @@ class ChatMessageOut(BaseModel):
     """SPRINT AI-3 — True iff the AI-3 layer successfully
     parsed and validated the LLM's claim_aware payload
     (or the fallback built one from AssistantContext)."""
+
+    claim_audit: dict | None = None
+    """SPRINT AI-4 — the full ``ClaimAuditReport.to_dict()``
+    payload. None for legacy rows that pre-date AI-4; the
+    deterministic fallback ALWAYS populates it."""
+
+    claim_audit_rejected: bool = False
+    """SPRINT AI-4 — True iff the AI-4 auditor triggered any
+    hard-rejection condition. The frontend renders an
+    "Answer withheld — reason" stub when this flag is True."""
+
+    claim_audit_soft_corrections: int = Field(default=0, ge=0)
+    """SPRINT AI-4 — count of claims the auditor rewrote
+    without rejecting the whole answer. Zero when no
+    soft-correction was applied."""
+
+    claim_audit_trace: ChatClaimAuditTrace | None = None
+    """SPRINT AI-4 — typed mirror of the AI-4 auditor trace.
+    ``None`` for legacy rows that pre-date AI-4; the
+    deterministic fallback ALWAYS populates it. The raw
+    dict form is also exposed via ``claim_audit`` for
+    backends that introspect the audit JSON."""
 
 
 # --------------------------------------------------------------------------- #

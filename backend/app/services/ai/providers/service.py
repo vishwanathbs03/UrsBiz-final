@@ -841,6 +841,74 @@ class AssistantProviderService:
                 else ""
             ),
         )
+
+        # AI-4 — server-side Claim Auditor. Runs after the AI-3
+        # numeric checker so it can consume the numeric_report.
+        # Whole stage is fenced in try/except so an auditor bug
+        # never crashes the chat endpoint.
+        claim_audit_report_dict: dict | None = None
+        claim_audit_rejected = False
+        claim_audit_soft_corrections = 0
+        try:
+            from app.services.ai.providers.claim_auditor import (
+                ClaimAuditor,
+            )
+
+            audit_report = ClaimAuditor(
+                registry=registry,
+                numeric_report=numeric_report,
+            ).audit(claim_response)
+            claim_audit_report_dict = audit_report.to_dict()
+            claim_audit_rejected = bool(audit_report.rejected)
+            claim_audit_soft_corrections = int(
+                audit_report.soft_corrections
+            )
+            # Carry the trace into the wire envelope so the
+            # conversation_service can project it onto
+            # ChatMessageOut for the "Why am I seeing this?"
+            # disclosure panel.
+            if claim_audit_report_dict is not None:
+                existing_payload = dict(meta.grounded_payload or {})
+                existing_payload["claim_audit"] = claim_audit_report_dict
+                meta = _replace_ai3(meta, grounded_payload=existing_payload)
+            # When the auditor rejects, the response body remains
+            # in place — the frontend renders an "Answer withheld
+            # — reason" stub from claim_audit_rejected + the
+            # rejection_reason string. The chat endpoint still
+            # returns a valid ChatMessageAppendResponse.
+            if claim_audit_rejected:
+                logger.info(
+                    "ai.provider.ai4_claim_auditor_rejected",
+                    extra={
+                        "event": "ai.provider.ai4_claim_auditor_rejected",
+                        "mode": "grounded",
+                        "rejection_reason": audit_report.rejection_reason,
+                        "request_id": getattr(
+                            request, "request_id", None
+                        ),
+                    },
+                )
+        except Exception as exc:  # noqa: BLE001 — defensive fence
+            logger.warning(
+                "ai.provider.ai4_claim_auditor_failed: %s",
+                exc,
+                extra={
+                    "event": "ai.provider.ai4_claim_auditor_failed",
+                    "mode": "grounded",
+                    "request_id": getattr(request, "request_id", None),
+                },
+            )
+
+        # Stamp the AI-4 envelope onto GenerationMeta. The 3
+        # fields default to None / False / 0 so legacy rows that
+        # pre-date AI-4 still validate.
+        from dataclasses import replace as _replace_ai4
+        meta = _replace_ai4(
+            meta,
+            claim_audit=claim_audit_report_dict,
+            claim_audit_rejected=claim_audit_rejected,
+            claim_audit_soft_corrections=claim_audit_soft_corrections,
+        )
         # Carry the AI-3 payload to the wire via GenerationMeta
         # ``grounded_payload`` so the conversation_service can
         # project it onto ChatMessageOut.preserve the existing

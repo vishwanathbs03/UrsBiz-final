@@ -493,6 +493,24 @@ def _message_payload(msg) -> dict:
     gen_server_confidence_rationale = str(
         (generation or {}).get("server_confidence_rationale") or ""
     )
+    # AI-4 — server-side claim auditor mirrors. The compact
+    # claim trace is stashed on GenerationMeta.grounded_payload
+    # by the AI-4 pipeline (service.py) and mirrored to the
+    # wire as a top-level ``claim_audit`` field so the
+    # frontend's "Why am I seeing this?" disclosure panel
+    # renders without drilling into ``generation.*``.
+    gen_claim_audit = (
+        gen_grounded_payload.get("claim_audit")
+        if gen_grounded_payload is not None
+        and isinstance(gen_grounded_payload.get("claim_audit"), dict)
+        else None
+    )
+    gen_claim_audit_rejected = bool(
+        (generation or {}).get("claim_audit_rejected") or False
+    )
+    gen_claim_audit_soft_corrections = int(
+        (generation or {}).get("claim_audit_soft_corrections") or 0
+    )
 
     payload = {
         "id": int(msg.id),
@@ -541,6 +559,15 @@ def _message_payload(msg) -> dict:
         "numeric_conflicts_count": gen_numeric_conflicts_count,
         "server_confidence": gen_server_confidence,
         "server_confidence_rationale": gen_server_confidence_rationale,
+        # AI-4 — claim-auditor mirrors. The compact trace
+        # (``gen_claim_audit``) is what the "Why am I seeing
+        # this?" disclosure panel renders; the two boolean
+        # companions let the frontend stamp a top-level trust
+        # badge without parsing the trace. Backward-compatible:
+        # all three default to None / False / 0 on legacy rows.
+        "claim_audit": gen_claim_audit,
+        "claim_audit_rejected": gen_claim_audit_rejected,
+        "claim_audit_soft_corrections": gen_claim_audit_soft_corrections,
     }
     # H7.8C — leak guard. The serializer must never emit a
     # field name from the brief-mandated secret set

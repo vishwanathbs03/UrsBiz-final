@@ -110,6 +110,13 @@ def build_fallback_claim_aware(request: Any) -> dict[str, Any]:
         "server_confidence_rationale": "fallback grounded by construction",
         "numeric_conflicts": [],
         "server_audit": {"source": "deterministic_fallback"},
+        # SPRINT AI-4 — the fallback is grounded by construction;
+        # the auditor's trace carries validated=True + numeric_match=
+        # True for every claim and reports rejected=False,
+        # soft_corrections=0. The frontend's "Why am I seeing this?"
+        # disclosure panel renders each record's evidence IDs +
+        # confidence score from this payload.
+        "claim_audit": _build_fallback_audit(claims, recommendations),
     }
 
 
@@ -130,6 +137,89 @@ def _summary_text(context: Any) -> str:
 
 
 def _empty_payload() -> dict[str, Any]:
+    return {
+        "answer": "",
+        "claims": [],
+        "recommendations": [],
+        "calculations": [],
+        "scenarios": [],
+        "unknowns": [],
+        "evidence_references": [],
+        "assumptions": [],
+        "limitations": ["Business profile not yet available."],
+        "narrative": "",
+        "server_confidence": 0,
+        "server_confidence_rationale": "no AssistantContext available",
+        "numeric_conflicts": [],
+        "server_audit": {"source": "deterministic_fallback", "empty": True},
+        "claim_audit": {
+            "rejected": False,
+            "rejection_reason": "",
+            "soft_corrections": 0,
+            "records": [],
+        },
+    }
+
+
+def _build_fallback_audit(
+    claims: list[dict], recommendations: list[dict]
+) -> dict[str, Any]:
+    """Build the AI-4 auditor trace for the fallback path.
+
+    Every claim and every recommendation the fallback emits is
+    grounded by construction — there is no LLM in the loop — so
+    every record reports validated=True with confidence=100. The
+    trace is what the frontend's "Why am I seeing this?"
+    disclosure panel renders.
+    """
+    records: list[dict[str, Any]] = []
+    for idx, claim in enumerate(claims):
+        text = str(claim.get("text", "") or "")
+        records.append({
+            "claim_id": f"claim_{idx:03d}",
+            "claim_type": str(claim.get("claim_type", "FACT")),
+            "text_preview": text[:119] + ("…" if len(text) > 119 else ""),
+            "evidence_ids": list(claim.get("evidence_references", []) or []),
+            "evidence_exists": True,
+            "evidence_supports": True,
+            "numeric_match": True,
+            "is_inference": False,
+            "has_assumptions": False,
+            "is_hypothetical": False,
+            "requires_verification": False,
+            "validated": True,
+            "confidence": int(claim.get("confidence", 100) or 100),
+            "rejection_reason": "",
+            "soft_corrected": False,
+        })
+    for idx, rec in enumerate(recommendations):
+        text = str(rec.get("title", "") or "") + " " + str(
+            rec.get("reason", "") or ""
+        )
+        records.append({
+            "claim_id": f"recommendation_{idx:03d}",
+            "claim_type": "RECOMMENDATION",
+            "text_preview": text.strip()[:119]
+            + ("…" if len(text.strip()) > 119 else ""),
+            "evidence_ids": list(rec.get("evidence_references", []) or []),
+            "evidence_exists": True,
+            "evidence_supports": True,
+            "numeric_match": True,
+            "is_inference": False,
+            "has_assumptions": True,
+            "is_hypothetical": False,
+            "requires_verification": False,
+            "validated": True,
+            "confidence": 100,
+            "rejection_reason": "",
+            "soft_corrected": False,
+        })
+    return {
+        "rejected": False,
+        "rejection_reason": "",
+        "soft_corrections": 0,
+        "records": records,
+    }
     return {
         "answer": "",
         "claims": [],

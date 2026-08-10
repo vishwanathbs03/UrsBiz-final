@@ -611,6 +611,22 @@ class GenerationMeta:
     server_confidence: int | None = None
     server_confidence_rationale: str = ""
 
+    # SPRINT AI-4 — server-side Claim Auditor trace. The trace
+    # carries per-claim evidence / numeric / hypothesis flags so
+    # the frontend's "Why am I seeing this?" disclosure panel can
+    # render the audit trail. All three fields have safe defaults
+    # so legacy rows that pre-date AI-4 still validate.
+    #   * ``claim_audit`` — the full ``ClaimAuditReport.to_dict()``
+    #     payload (rejected / rejection_reason / soft_corrections
+    #     / records[]).
+    #   * ``claim_audit_rejected`` — True iff the auditor
+    #     triggered any hard-rejection condition.
+    #   * ``claim_audit_soft_corrections`` — count of claims the
+    #     auditor rewrote without rejecting the whole answer.
+    claim_audit: dict | None = None
+    claim_audit_rejected: bool = False
+    claim_audit_soft_corrections: int = 0
+
     @staticmethod
     def empty(
         *,
@@ -643,6 +659,9 @@ class GenerationMeta:
         numeric_conflicts_count: int = 0,
         server_confidence: int | None = None,
         server_confidence_rationale: str = "",
+        claim_audit: dict | None = None,
+        claim_audit_rejected: bool = False,
+        claim_audit_soft_corrections: int = 0,
     ) -> "GenerationMeta":
         """Return a default-valued GenerationMeta."""
         return GenerationMeta(
@@ -675,6 +694,9 @@ class GenerationMeta:
             numeric_conflicts_count=numeric_conflicts_count,
             server_confidence=server_confidence,
             server_confidence_rationale=server_confidence_rationale,
+            claim_audit=claim_audit,
+            claim_audit_rejected=claim_audit_rejected,
+            claim_audit_soft_corrections=claim_audit_soft_corrections,
         )
 
     def merge(self, **overrides: Any) -> "GenerationMeta":
